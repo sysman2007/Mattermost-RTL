@@ -1,10 +1,10 @@
-// Barsam — Mattermost webapp plugin.
-// Port of the Barsam Chrome extension: Persian-first smart bidi per message,
+// Mattermost RTL — Mattermost webapp plugin.
+// Port of a Chrome extension: Persian-first smart bidi per message,
 // hover direction toolbar, RTL/LTR whole page, Persian fonts, collapsible LHS.
 (function () {
   'use strict';
 
-  const PLUGIN_ID = 'com.ibarsam.barsam';
+  const PLUGIN_ID = 'com.github.sysman2007.mattermost-rtl';
   const PREF_CATEGORY = `pp_${PLUGIN_ID}`;
   let store = null;
 
@@ -26,19 +26,19 @@
       local: {
         get(key, cb) {
           let v = null;
-          try { v = JSON.parse(localStorage.getItem(`barsam:${key}`) || 'null'); } catch (e) { /* ignore */ }
+          try { v = JSON.parse(localStorage.getItem(`mmrtl:${key}`) || 'null'); } catch (e) { /* ignore */ }
           cb({ [key]: v });
         },
         set(obj) {
           try {
-            for (const [k, v] of Object.entries(obj)) localStorage.setItem(`barsam:${k}`, JSON.stringify(v));
+            for (const [k, v] of Object.entries(obj)) localStorage.setItem(`mmrtl:${k}`, JSON.stringify(v));
           } catch (e) { /* storage full or blocked */ }
         }
       },
       onChanged: {
         addListener(fn) {
           addEventListener('storage', e => {
-            if (!e.key || !e.key.startsWith('barsam:')) return;
+            if (!e.key || !e.key.startsWith('mmrtl:')) return;
             let v = null;
             try { v = JSON.parse(e.newValue || 'null'); } catch (err) { /* ignore */ }
             fn({ [e.key.slice(7)]: { newValue: v } }, 'local');
@@ -51,11 +51,11 @@
   const FA_UNICODE = 'U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C, U+200D';
 
   const FA_FONTS = {
-    vazirmatn: { file: 'fonts/Vazirmatn-Regular.ttf', family: 'barsam-fa' },
-    iransans: { file: 'fonts/IRANSansWeb.ttf', family: 'barsam-fa' },
-    yekan: { file: 'fonts/Yekan.ttf', family: 'barsam-fa' },
-    yekanbakh: { file: 'fonts/YekanBakhFaEn04Regular.ttf', family: 'barsam-fa' },
-    nastaliq: { file: 'fonts/NotoNastaliqUrdu-Regular.ttf', family: 'barsam-fa' },
+    vazirmatn: { file: 'fonts/Vazirmatn-Regular.ttf', family: 'mmrtl-fa' },
+    iransans: { file: 'fonts/IRANSansWeb.ttf', family: 'mmrtl-fa' },
+    yekan: { file: 'fonts/Yekan.ttf', family: 'mmrtl-fa' },
+    yekanbakh: { file: 'fonts/YekanBakhFaEn04Regular.ttf', family: 'mmrtl-fa' },
+    nastaliq: { file: 'fonts/NotoNastaliqUrdu-Regular.ttf', family: 'mmrtl-fa' },
     tahoma: { file: null, family: 'Tahoma' },
     'site-default': null
   };
@@ -86,7 +86,7 @@
     let css = '';
     if (fa?.file) {
       css += `@font-face {
-        font-family: "barsam-fa";
+        font-family: "mmrtl-fa";
         src: url("${chrome.runtime.getURL(fa.file)}") format("truetype");
         unicode-range: ${FA_UNICODE};
         font-style: normal; font-weight: 100 900; font-display: swap;
@@ -97,12 +97,12 @@
       // Same face for Latin text too: register the full font without unicode-range.
       if (fa?.file) {
         css += `@font-face {
-          font-family: "barsam-all";
+          font-family: "mmrtl-all";
           src: url("${chrome.runtime.getURL(fa.file)}") format("truetype");
           font-style: normal; font-weight: 100 900; font-display: swap;
         }
 `;
-        en = '"barsam-all"';
+        en = '"mmrtl-all"';
       } else {
         en = fa?.family ? `"${fa.family}"` : null;
       }
@@ -125,10 +125,10 @@
         #post_textbox, #reply_textbox, #edit_textbox { color: ${color} !important; }
 `;
     }
-    let st = document.getElementById('barsam-style');
+    let st = document.getElementById('mmrtl-style');
     if (!st) {
       st = document.createElement('style');
-      st.id = 'barsam-style';
+      st.id = 'mmrtl-style';
       getStyleContainer().appendChild(st);
     }
     st.textContent = css;
@@ -141,26 +141,26 @@
     for (const el of [html, document.body]) {
       if (!el) continue;
       if (pageDir === 'site-default') {
-        if (el.dataset.barsamPageDir) {
-          el.setAttribute('dir', el.dataset.barsamPageDirOrig || '');
-          if (!el.dataset.barsamPageDirOrig) el.removeAttribute('dir');
-          delete el.dataset.barsamPageDir;
-          delete el.dataset.barsamPageDirOrig;
+        if (el.dataset.mmrtlPageDir) {
+          el.setAttribute('dir', el.dataset.mmrtlPageDirOrig || '');
+          if (!el.dataset.mmrtlPageDirOrig) el.removeAttribute('dir');
+          delete el.dataset.mmrtlPageDir;
+          delete el.dataset.mmrtlPageDirOrig;
         }
       } else {
-        if (!el.dataset.barsamPageDir) el.dataset.barsamPageDirOrig = el.getAttribute('dir') || '';
-        el.dataset.barsamPageDir = pageDir;
+        if (!el.dataset.mmrtlPageDir) el.dataset.mmrtlPageDirOrig = el.getAttribute('dir') || '';
+        el.dataset.mmrtlPageDir = pageDir;
         if (el.getAttribute('dir') !== pageDir) el.setAttribute('dir', pageDir);
       }
     }
-    let st = document.getElementById('barsam-page-dir');
+    let st = document.getElementById('mmrtl-page-dir');
     if (pageDir === 'site-default') { st?.remove(); return; }
     if (!st) {
       st = document.createElement('style');
-      st.id = 'barsam-page-dir';
+      st.id = 'mmrtl-page-dir';
       getStyleContainer().appendChild(st);
     }
-    st.textContent = `html[data-barsam-page-dir], body[data-barsam-page-dir] { direction: ${pageDir} !important; }`;
+    st.textContent = `html[data-mmrtl-page-dir], body[data-mmrtl-page-dir] { direction: ${pageDir} !important; }`;
   }
 
   // Keep the chosen direction if the site (or a late <body>) resets it.
@@ -181,7 +181,7 @@
     const GROUPS = 'ul, ol, blockquote, table';
     const SKIP = 'pre, code, kbd, samp, .markdown-inline-img, .emoticon';
     const INPUTS = 'textarea';
-    const STORE_KEY = 'barsamBidiOverrides';
+    const STORE_KEY = 'mmrtlBidiOverrides';
     const MAX_OVERRIDES = 3000;
 
     let enabled = false;
@@ -219,11 +219,11 @@
     function setDir(el, dir, source) {
       if (!dir) {
         el.removeAttribute('dir');
-        delete el.dataset.barsamDir;
+        delete el.dataset.mmrtlDir;
         return;
       }
       if (el.getAttribute('dir') !== dir) el.setAttribute('dir', dir);
-      el.dataset.barsamDir = source;
+      el.dataset.mmrtlDir = source;
     }
 
     function blocksOf(msg) {
@@ -237,12 +237,12 @@
       const forced = key && overrides[key];
       // Skip unchanged messages so site re-renders can't turn into a feedback loop.
       const sig = `${forced || ''}|${msg.childElementCount}|${msg.textContent.length}`;
-      if (msg.dataset.barsamSig === sig) return;
-      msg.dataset.barsamSig = sig;
-      msg.classList.add('barsam-bidi-msg');
+      if (msg.dataset.mmrtlSig === sig) return;
+      msg.dataset.mmrtlSig = sig;
+      msg.classList.add('mmrtl-bidi-msg');
       if (forced) {
         // A manual choice applies to the whole message.
-        msg.querySelectorAll('[data-barsam-dir]').forEach(el => el !== msg && setDir(el, null));
+        msg.querySelectorAll('[data-mmrtl-dir]').forEach(el => el !== msg && setDir(el, null));
         setDir(msg, forced, 'user');
         return;
       }
@@ -262,16 +262,16 @@
     }
 
     function clearMessage(msg) {
-      delete msg.dataset.barsamSig;
-      msg.querySelectorAll('[data-barsam-dir]').forEach(el => setDir(el, null));
-      if (msg.dataset.barsamDir) setDir(msg, null);
+      delete msg.dataset.mmrtlSig;
+      msg.querySelectorAll('[data-mmrtl-dir]').forEach(el => setDir(el, null));
+      if (msg.dataset.mmrtlDir) setDir(msg, null);
     }
 
     function processInput(el) {
       if (!enabled || el.closest(SKIP)) return;
       const dir = detect(el.value || '') || (el.value ? el.getAttribute('dir') || 'rtl' : 'rtl');
       if (el.getAttribute('dir') !== dir) el.setAttribute('dir', dir);
-      el.classList.add('barsam-bidi-input');
+      el.classList.add('mmrtl-bidi-input');
     }
 
     function queue(root) {
@@ -311,18 +311,18 @@
     };
 
     function injectCSS() {
-      if (document.getElementById('barsam-bidi-style')) return;
+      if (document.getElementById('mmrtl-bidi-style')) return;
       const st = document.createElement('style');
-      st.id = 'barsam-bidi-style';
+      st.id = 'mmrtl-bidi-style';
       st.textContent = `
-        .barsam-bidi-msg[dir], .barsam-bidi-msg [dir] { text-align: start !important; }
+        .mmrtl-bidi-msg[dir], .mmrtl-bidi-msg [dir] { text-align: start !important; }
         /* dir attribute alone loses to site CSS that sets direction (e.g. on lists). */
-        .barsam-bidi-msg[dir="rtl"], .barsam-bidi-msg [dir="rtl"] { direction: rtl !important; }
-        .barsam-bidi-msg[dir="ltr"], .barsam-bidi-msg [dir="ltr"] { direction: ltr !important; }
-        .barsam-bidi-msg li[dir] { text-align: start !important; }
-        .barsam-bidi-input[dir] { text-align: start !important; }
-        .barsam-bidi-input[dir="rtl"] { direction: rtl !important; }
-        .barsam-bidi-input[dir="ltr"] { direction: ltr !important; }
+        .mmrtl-bidi-msg[dir="rtl"], .mmrtl-bidi-msg [dir="rtl"] { direction: rtl !important; }
+        .mmrtl-bidi-msg[dir="ltr"], .mmrtl-bidi-msg [dir="ltr"] { direction: ltr !important; }
+        .mmrtl-bidi-msg li[dir] { text-align: start !important; }
+        .mmrtl-bidi-input[dir] { text-align: start !important; }
+        .mmrtl-bidi-input[dir="rtl"] { direction: rtl !important; }
+        .mmrtl-bidi-input[dir="ltr"] { direction: ltr !important; }
         .post-message__text ul[dir], .post-message__text ol[dir] { padding-inline-start: 1.6em; padding-inline-end: 0; }
         .post-message__text blockquote[dir="rtl"] {
           border-left: 0 !important; border-right: 4px solid rgba(var(--center-channel-color-rgb, 63,67,80), .16);
@@ -330,22 +330,22 @@
         }
         .post-message__text code { unicode-bidi: isolate; direction: ltr; }
         .post-message__text a, .post-message__text .mention-link { unicode-bidi: isolate; }
-        #barsam-bidi-bar {
+        #mmrtl-bidi-bar {
           position: fixed; z-index: 2147483000; display: flex; flex-direction: column; gap: 2px;
           padding: 3px; border-radius: 8px; direction: ltr;
           background: rgba(30, 35, 48, .72); backdrop-filter: blur(4px);
           box-shadow: 0 2px 8px rgba(0,0,0,.18);
           opacity: 0; pointer-events: none; transition: opacity .15s ease;
         }
-        #barsam-bidi-bar.show { opacity: .38; pointer-events: auto; }
-        #barsam-bidi-bar.show:hover { opacity: 1; }
-        #barsam-bidi-bar button {
+        #mmrtl-bidi-bar.show { opacity: .38; pointer-events: auto; }
+        #mmrtl-bidi-bar.show:hover { opacity: 1; }
+        #mmrtl-bidi-bar button {
           all: unset; box-sizing: border-box; width: 20px; height: 20px; border-radius: 5px;
           display: flex; align-items: center; justify-content: center; cursor: pointer; color: #cbd5e1;
         }
-        #barsam-bidi-bar button:hover { background: rgba(255,255,255,.12); color: #fff; }
-        #barsam-bidi-bar button.on { background: linear-gradient(135deg,#5b6af8,#a855f7); color: #fff; }
-        #barsam-bidi-bar svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+        #mmrtl-bidi-bar button:hover { background: rgba(255,255,255,.12); color: #fff; }
+        #mmrtl-bidi-bar button.on { background: linear-gradient(135deg,#5b6af8,#a855f7); color: #fff; }
+        #mmrtl-bidi-bar svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
       `;
       (document.head || document.documentElement).appendChild(st);
     }
@@ -353,7 +353,7 @@
     function ensureBar() {
       if (bar) return bar;
       bar = document.createElement('div');
-      bar.id = 'barsam-bidi-bar';
+      bar.id = 'mmrtl-bidi-bar';
       bar.setAttribute('role', 'toolbar');
       bar.innerHTML = `
         <button type="button" data-dir="rtl" title="راست‌به‌چپ (RTL)">${ICONS.rtl}</button>
@@ -374,7 +374,7 @@
 
     function refreshButtons() {
       if (!bar || !current) return;
-      const mode = current.dataset.barsamDir === 'user' ? current.getAttribute('dir') : 'auto';
+      const mode = current.dataset.mmrtlDir === 'user' ? current.getAttribute('dir') : 'auto';
       bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.dir === mode));
     }
 
@@ -431,7 +431,7 @@
       } else if (dir !== 'auto') {
         setDir(msg, dir, 'user');
       }
-      delete msg.dataset.barsamSig;
+      delete msg.dataset.mmrtlSig;
       processMessage(msg);
       refreshButtons();
       placeBar();
@@ -487,7 +487,7 @@
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local' && changes[STORE_KEY]) {
           overrides = changes[STORE_KEY].newValue || {};
-          document.querySelectorAll(MSG).forEach(m => delete m.dataset.barsamSig);
+          document.querySelectorAll(MSG).forEach(m => delete m.dataset.mmrtlSig);
           if (enabled) document.querySelectorAll(MSG).forEach(processMessage);
         }
       });
@@ -525,20 +525,20 @@
 
     function render() {
       const collapsed = manual ?? mq.matches;
-      document.documentElement.classList.toggle('barsam-lhs-collapsed', collapsed);
-      document.documentElement.classList.toggle('barsam-lhs-open', !collapsed);
+      document.documentElement.classList.toggle('mmrtl-lhs-collapsed', collapsed);
+      document.documentElement.classList.toggle('mmrtl-lhs-open', !collapsed);
     }
 
     function injectCSS() {
-      if (document.getElementById('barsam-lhs-style')) return;
+      if (document.getElementById('mmrtl-lhs-style')) return;
       const st = document.createElement('style');
-      st.id = 'barsam-lhs-style';
+      st.id = 'mmrtl-lhs-style';
       st.textContent = `
         #global-header [class^="ProductBranding"], #global-header [class*=" ProductBranding"] { cursor: pointer; }
-        html.barsam-lhs-collapsed:not(.barsam-lhs-disabled) #SidebarContainer { display: none !important; }
-        html.barsam-lhs-collapsed:not(.barsam-lhs-disabled) .main-wrapper { grid-template-columns: 0 minmax(0, 1fr) auto !important; }
+        html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) #SidebarContainer { display: none !important; }
+        html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) .main-wrapper { grid-template-columns: 0 minmax(0, 1fr) auto !important; }
         @media (max-width: 768px) {
-          html.barsam-lhs-open:not(.barsam-lhs-disabled) #SidebarContainer {
+          html.mmrtl-lhs-open:not(.mmrtl-lhs-disabled) #SidebarContainer {
             display: flex !important; position: fixed !important; top: 0; bottom: 0;
             inset-inline-start: 0; width: 264px !important; z-index: 1000; transform: none !important;
             box-shadow: 0 0 24px rgba(0,0,0,.3);
@@ -556,10 +556,10 @@
       // Capture phase so the click toggles the sidebar instead of opening the product menu.
       document.addEventListener('click', e => {
         const logo = e.target.closest?.(LOGO);
-        if (!logo || document.documentElement.classList.contains('barsam-lhs-disabled')) return;
+        if (!logo || document.documentElement.classList.contains('mmrtl-lhs-disabled')) return;
         e.preventDefault();
         e.stopPropagation();
-        manual = !document.documentElement.classList.contains('barsam-lhs-collapsed');
+        manual = !document.documentElement.classList.contains('mmrtl-lhs-collapsed');
         render();
       }, true);
       document.addEventListener('mouseover', e => {
@@ -580,7 +580,7 @@
   }
 
 
-  // ── Settings: per-user preferences from Settings → Barsam (defaults below).
+  // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
   const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on' };
   let last = '';
   let sidebarOn = false;
@@ -613,7 +613,7 @@
     RtlMirror.configure(dir === 'rtl');
     Bidi.configure({ enabled: s.bidi === 'smart', hover: s.hover !== 'off' });
     const off = s.sidebar_toggle !== 'on';
-    document.documentElement.classList.toggle('barsam-lhs-disabled', off);
+    document.documentElement.classList.toggle('mmrtl-lhs-disabled', off);
     if (!sidebarOn) { sidebarOn = true; Sidebar.start(); }
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
@@ -731,35 +731,35 @@
     }
 
     function injectCSS() {
-      if (document.getElementById('barsam-fwd-style')) return;
+      if (document.getElementById('mmrtl-fwd-style')) return;
       const st = document.createElement('style');
-      st.id = 'barsam-fwd-style';
+      st.id = 'mmrtl-fwd-style';
       st.textContent = `
-        #barsam-fwd { position: fixed; inset: 0; z-index: 2147483100; background: rgba(0,0,0,.45);
+        #mmrtl-fwd { position: fixed; inset: 0; z-index: 2147483100; background: rgba(0,0,0,.45);
           display: flex; align-items: center; justify-content: center; padding: 16px; }
-        #barsam-fwd .box { width: min(480px, 100%); max-height: 90vh; overflow: auto; text-align: start;
+        #mmrtl-fwd .box { width: min(480px, 100%); max-height: 90vh; overflow: auto; text-align: start;
           background: var(--center-channel-bg, #fff); color: var(--center-channel-color, #3f4350);
           border-radius: 12px; box-shadow: 0 20px 32px rgba(0,0,0,.25); padding: 20px; font-size: 14px; }
-        #barsam-fwd h3 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
-        #barsam-fwd .preview { border-inline-start: 3px solid rgba(var(--center-channel-color-rgb, 63,67,80), .2);
+        #mmrtl-fwd h3 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+        #mmrtl-fwd .preview { border-inline-start: 3px solid rgba(var(--center-channel-color-rgb, 63,67,80), .2);
           padding: 6px 10px; margin-bottom: 12px; opacity: .8; white-space: pre-wrap; max-height: 120px; overflow: auto; unicode-bidi: plaintext; }
-        #barsam-fwd input, #barsam-fwd textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
+        #mmrtl-fwd input, #mmrtl-fwd textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
           border: 1px solid rgba(var(--center-channel-color-rgb, 63,67,80), .24); background: transparent; color: inherit;
           font: inherit; margin-bottom: 8px; unicode-bidi: plaintext; }
-        #barsam-fwd ul { list-style: none; margin: 0 0 8px; padding: 0; max-height: 200px; overflow: auto; }
-        #barsam-fwd li { padding: 7px 10px; border-radius: 6px; cursor: pointer; unicode-bidi: plaintext; }
-        #barsam-fwd li:hover, #barsam-fwd li.sel { background: rgba(var(--button-bg-rgb, 28,88,217), .12); }
-        #barsam-fwd .chosen { margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-        #barsam-fwd .chip { background: rgba(var(--button-bg-rgb, 28,88,217), .12); border-radius: 12px; padding: 2px 10px;
+        #mmrtl-fwd ul { list-style: none; margin: 0 0 8px; padding: 0; max-height: 200px; overflow: auto; }
+        #mmrtl-fwd li { padding: 7px 10px; border-radius: 6px; cursor: pointer; unicode-bidi: plaintext; }
+        #mmrtl-fwd li:hover, #mmrtl-fwd li.sel { background: rgba(var(--button-bg-rgb, 28,88,217), .12); }
+        #mmrtl-fwd .chosen { margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+        #mmrtl-fwd .chip { background: rgba(var(--button-bg-rgb, 28,88,217), .12); border-radius: 12px; padding: 2px 10px;
           font-size: 12px; cursor: pointer; unicode-bidi: plaintext; }
-        #barsam-fwd .chip:hover { background: rgba(var(--error-text-color-rgb, 210,75,78), .16); }
-        #barsam-fwd .row { display: flex; gap: 8px; justify-content: flex-start; margin-top: 8px; align-items: center; }
-        #barsam-fwd button { border: 0; border-radius: 6px; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; }
-        #barsam-fwd .ok { background: var(--button-bg, #1c58d9); color: var(--button-color, #fff); }
-        #barsam-fwd .ok:disabled { opacity: .5; cursor: default; }
-        #barsam-fwd .cancel { background: rgba(var(--center-channel-color-rgb, 63,67,80), .08); color: inherit; }
-        #barsam-fwd .status { font-size: 12px; opacity: .8; }
-        #barsam-fwd .err { color: var(--error-text, #d24b4e); }`;
+        #mmrtl-fwd .chip:hover { background: rgba(var(--error-text-color-rgb, 210,75,78), .16); }
+        #mmrtl-fwd .row { display: flex; gap: 8px; justify-content: flex-start; margin-top: 8px; align-items: center; }
+        #mmrtl-fwd button { border: 0; border-radius: 6px; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+        #mmrtl-fwd .ok { background: var(--button-bg, #1c58d9); color: var(--button-color, #fff); }
+        #mmrtl-fwd .ok:disabled { opacity: .5; cursor: default; }
+        #mmrtl-fwd .cancel { background: rgba(var(--center-channel-color-rgb, 63,67,80), .08); color: inherit; }
+        #mmrtl-fwd .status { font-size: 12px; opacity: .8; }
+        #mmrtl-fwd .err { color: var(--error-text, #d24b4e); }`;
       (document.head || document.documentElement).appendChild(st);
     }
 
@@ -780,7 +780,7 @@
       const targets = new Map();
       let timer = 0;
 
-      overlay = el('div', { id: 'barsam-fwd' });
+      overlay = el('div', { id: 'mmrtl-fwd' });
       const box = el('div', { className: 'box', role: 'dialog' });
       box.dir = isFa() ? 'rtl' : 'ltr';
       box.append(el('h3', {}, L('ارسال به…', 'Send to…')));
@@ -879,10 +879,10 @@
     const SEL = '.post__header time.post__time[datetime]';
 
     function injectCSS() {
-      if (document.getElementById('barsam-stamp-style')) return;
+      if (document.getElementById('mmrtl-stamp-style')) return;
       const st = document.createElement('style');
-      st.id = 'barsam-stamp-style';
-      st.textContent = `html.barsam-full-time ${SEL}[data-barsam-date]::before { content: attr(data-barsam-date); }`;
+      st.id = 'mmrtl-stamp-style';
+      st.textContent = `html.mmrtl-full-time ${SEL}[data-mmrtl-date]::before { content: attr(data-mmrtl-date); }`;
       (document.head || document.documentElement).appendChild(st);
     }
 
@@ -899,16 +899,16 @@
       const loc = locale();
       for (const t of document.querySelectorAll(SEL)) {
         const key = `${t.getAttribute('datetime')}|${loc}`;
-        if (t.dataset.barsamKey === key) continue;
-        t.dataset.barsamKey = key;
-        t.dataset.barsamDate = label(t.getAttribute('datetime'));
+        if (t.dataset.mmrtlKey === key) continue;
+        t.dataset.mmrtlKey = key;
+        t.dataset.mmrtlDate = label(t.getAttribute('datetime'));
       }
     }
 
     function configure(enabled) {
       on = enabled;
       injectCSS();
-      document.documentElement.classList.toggle('barsam-full-time', on);
+      document.documentElement.classList.toggle('mmrtl-full-time', on);
       apply();
     }
 
@@ -995,8 +995,8 @@
       'border-bottom-left-radius': '0', 'border-bottom-right-radius': '0'
     };
     const SWAP_VALUE = ['text-align', 'float', 'clear'];
-    const OWN = /^barsam-/;
-    const OUT_ID = 'barsam-rtl-mirror';
+    const OWN = /^mmrtl-/;
+    const OUT_ID = 'mmrtl-rtl-mirror';
     // Fixes a generic mirror can't infer: directional icons (send, drafts), and
     // a side that only got its value from a less specific rule.
     const RTL_EXTRA = `
@@ -1057,7 +1057,7 @@
       for (const r of rules) {
         if (r.type === CSSRule.STYLE_RULE) {
           const sel = r.selectorText;
-          if (!sel || sel.includes('[dir') || sel.includes(':dir(') || sel.includes('barsam')) continue;
+          if (!sel || sel.includes('[dir') || sel.includes(':dir(') || sel.includes('mmrtl')) continue;
           const decls = mirrorDecls(r.style);
           if (decls.length) out.push(`${scope(sel)} { ${decls.join('; ')}; }`);
         } else if (r.type === CSSRule.MEDIA_RULE || r.type === CSSRule.SUPPORTS_RULE) {
@@ -1134,7 +1134,7 @@
       if (typeof registry.registerUserSettings === 'function') {
         registry.registerUserSettings({
           id: PLUGIN_ID,
-          uiName: L('برسام (فارسی)', 'Barsam (Persian)'),
+          uiName: L('Mattermost RTL (فارسی)', 'Mattermost RTL (Persian)'),
           icon: '',
           sections: [
             { title: 'جهت پیام‌ها', settings: [radio('bidi', 'جهت پیام‌ها', 'هوشمند: اگر پاراگراف حتی یک حرف فارسی داشته باشد راست‌به‌چپ می‌شود.', [['smart', 'هوشمند (اولویت فارسی)'], ['off', 'خاموش']])] },
@@ -1179,8 +1179,8 @@
       Bidi.configure({ enabled: false, hover: false });
       applyPageDir('site-default');
       RtlMirror.configure(false);
-      document.getElementById('barsam-style')?.remove();
-      document.documentElement.classList.remove('barsam-lhs-collapsed', 'barsam-lhs-open');
+      document.getElementById('mmrtl-style')?.remove();
+      document.documentElement.classList.remove('mmrtl-lhs-collapsed', 'mmrtl-lhs-open');
     }
   }
 

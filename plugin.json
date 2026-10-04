@@ -1,7 +1,7 @@
 {
-  "id": "com.ibarsam.barsam",
-  "name": "Barsam",
-  "description": "Persian-first smart bidi, page direction, Persian fonts and collapsible sidebar for iBarsam chat.",
+  "id": "com.github.sysman2007.mattermost-rtl",
+  "name": "Mattermost RTL",
+  "description": "Persian-first smart bidi, page direction, Persian fonts and collapsible sidebar for Mattermost.",
   "version": "1.5.1",
   "min_server_version": "9.0.0",
   "webapp": {

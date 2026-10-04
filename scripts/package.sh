@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the uploadable plugin bundle: dist/com.ibarsam.barsam-<version>.tar.gz
+# Build the uploadable plugin bundle: dist/com.github.sysman2007.mattermost-rtl-<version>.tar.gz
 # Usage: ./scripts/package.sh
 set -euo pipefail
 
