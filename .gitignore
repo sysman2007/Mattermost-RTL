@@ -1,5 +1,5 @@
 # Build output
-dist/
+/dist/
 
 # Commercial fonts (Fontiran licence) — not redistributable in a public repo.
 # Copy them into public/fonts/ locally before packaging; see README.
