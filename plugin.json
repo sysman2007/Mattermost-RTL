@@ -1,0 +1,10 @@
+{
+  "id": "com.ibarsam.barsam",
+  "name": "Barsam",
+  "description": "Persian-first smart bidi, page direction, Persian fonts and collapsible sidebar for iBarsam chat.",
+  "version": "1.5.1",
+  "min_server_version": "9.0.0",
+  "webapp": {
+    "bundle_path": "webapp/dist/main.js"
+  }
+}

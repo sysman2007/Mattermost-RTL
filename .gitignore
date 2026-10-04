@@ -1,0 +1,11 @@
+# Build output
+dist/
+
+# Commercial fonts (Fontiran licence) — not redistributable in a public repo.
+# Copy them into public/fonts/ locally before packaging; see README.
+public/fonts/IRANSansWeb.ttf
+public/fonts/Yekan.ttf
+public/fonts/YekanBakhFaEn04Regular.ttf
+
+.DS_Store
+Thumbs.db
