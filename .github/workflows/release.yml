@@ -1,0 +1,72 @@
+name: Release
+
+# Builds the plugin bundle from the tagged commit and publishes it as a
+# GitHub Release. Trigger by pushing a tag `vX.Y.Z` that matches the
+# "version" in plugin.json (or by creating the tag from the Releases page).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check tag matches plugin.json version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ID=$(sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' plugin.json)
+          VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' plugin.json)
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match plugin.json version $VERSION"
+            exit 1
+          fi
+          echo "asset=dist/$ID-$VERSION.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        run: bash scripts/package.sh
+
+      - name: Prepare release notes
+        env:
+          ASSET: ${{ steps.meta.outputs.asset }}
+        run: |
+          NOTES="release-notes/${GITHUB_REF_NAME}.md"
+          SHA=$(sha256sum "$ASSET" | cut -d' ' -f1)
+          {
+            if [ -f "$NOTES" ]; then cat "$NOTES"; echo; fi
+            echo '<div dir="ltr">'
+            echo
+            echo '```'
+            echo "SHA-256  $SHA  $(basename "$ASSET")"
+            echo '```'
+            echo
+            echo '</div>'
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.meta.outputs.asset }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Release was drafted from the UI first: attach the built bundle and set the notes.
+            gh release upload "$TAG" "$ASSET" --clobber
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" "$ASSET" --title "Mattermost RTL ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+          fi

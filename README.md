@@ -127,6 +127,16 @@ Mattermost-RTL/
 قبل از ساخت، فونت‌های تجاری را دستی در `public/fonts/` بگذارید ([فونت‌ها و مجوز](#فونتها-و-مجوز)).
 برای انتشار نسخهٔ جدید، فیلد `version` در `plugin.json` را بالا ببرید.
 
+### انتشار خودکار (Release)
+
+workflow `.github/workflows/release.yml` با push هر تگ `v*` اجرا می‌شود:
+
+1. `version` در `plugin.json` را بالا ببرید و (اختیاری) یادداشت نسخه را در `release-notes/v<version>.md` بنویسید؛ همه در `main` merge شوند.
+2. تگ را بسازید: `git tag v<version> && git push origin v<version>` — یا از صفحهٔ Releases با تگ جدید روی `main`.
+3. workflow بررسی می‌کند تگ با `version` یکی باشد، بسته را با `scripts/package.sh` می‌سازد، هش SHA-256 را به یادداشت اضافه می‌کند و Release را منتشر می‌کند (اگر Release از قبل در رابط GitHub ساخته شده باشد، فایل و یادداشت را روی همان می‌گذارد).
+
+بستهٔ ساخته‌شده در CI فقط فونت‌های داخل مخزن را دارد؛ فونت‌های تجاری در آن نیستند.
+
 ---
 
 ## معماری و جزئیات فنی
