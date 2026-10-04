@@ -1,18 +1,18 @@
 <div dir="rtl">
 
-# برسام — پلاگین فارسی‌سازی Mattermost
+# Mattermost RTL — پلاگین فارسی‌سازی Mattermost
 
-![version](https://img.shields.io/badge/version-1.5.1-5b6af8)
+![version](https://img.shields.io/badge/version-1.5.2-5b6af8)
 ![mattermost](https://img.shields.io/badge/Mattermost-9.0%2B%20(tested%2011.11)-0058cc)
 ![type](https://img.shields.io/badge/plugin-webapp--only-a855f7)
 
-**برسام** (`com.ibarsam.barsam`) یک پلاگین وب برای Mattermost است که تجربهٔ کار با زبان فارسی را کامل می‌کند:
+**Mattermost RTL** (`com.github.sysman2007.mattermost-rtl`) یک پلاگین وب برای Mattermost است که تجربهٔ کار با زبان فارسی را کامل می‌کند:
 جهت درست متن و صفحه، فونت‌های فارسی، تاریخ شمسی کامل، اصلاح خودکار تایپ فارسی، و فوروارد پیام از چت‌های خصوصی.
 
 این پلاگین فقط سمت کلاینت اجرا می‌شود (بدون باینری سرور)، پس نصبش فقط یک آپلود است و روی **وب و اپ دسکتاپ** Mattermost
-برای همهٔ کاربران فعال می‌شود. هر کاربر تنظیمات خودش را از **Settings ← برسام (فارسی)** انتخاب می‌کند.
+برای همهٔ کاربران فعال می‌شود. هر کاربر تنظیمات خودش را از **Settings ← Mattermost RTL (فارسی)** انتخاب می‌کند.
 
-> این پلاگین نسخهٔ سرور-محورِ افزونهٔ کروم «Barsam» است و همان رفتار را بدون نیاز به نصب افزونه روی هر سیستم ارائه می‌دهد.
+> این پلاگین نسخهٔ سرور-محورِ افزونهٔ کروم مشابه است و همان رفتار را بدون نیاز به نصب افزونه روی هر سیستم ارائه می‌دهد.
 
 ---
 
@@ -71,19 +71,19 @@
 
 ## نصب
 
-1. فایل بسته (`com.ibarsam.barsam-<version>.tar.gz`) را بسازید ([ساخت بسته](#ساخت-بسته)) یا از Releases بردارید.
+1. فایل بسته (`com.github.sysman2007.mattermost-rtl-<version>.tar.gz`) را بسازید ([ساخت بسته](#ساخت-بسته)) یا از Releases بردارید.
 2. **System Console ← Plugins ← Plugin Management ← Upload Plugin** و بعد **Enable**.
 3. اگر سرور پلاگین بدون امضا را رد کرد، در همان صفحه **Require Plugin Signature** را `false` کنید.
 4. کاربران صفحه را رفرش کنند. برای ارتقا همان‌جا نسخهٔ جدید را آپلود کنید؛ تنظیمات کاربران حفظ می‌شود.
 
 > **پیش‌نیاز:** `PluginSettings.EnableUploads = true`.
-> اگر افزونهٔ کروم Barsam نصب است، روی دامنهٔ چت غیرفعالش کنید تا دو نسخه هم‌زمان اجرا نشوند.
+> اگر افزونهٔ کروم مشابه نصب است، روی دامنهٔ چت غیرفعالش کنید تا دو نسخه هم‌زمان اجرا نشوند.
 
 ---
 
 ## تنظیمات کاربر
 
-همه در **Settings ← برسام (فارسی)** و به‌صورت ترجیحات کاربر (روی سرور) ذخیره می‌شوند:
+همه در **Settings ← Mattermost RTL (فارسی)** و به‌صورت ترجیحات کاربر (روی سرور) ذخیره می‌شوند:
 
 | تنظیم | گزینه‌ها | پیش‌فرض |
 |---|---|---|
@@ -106,10 +106,10 @@
 ## ساختار پروژه
 
 ```
-mattermost-plugin-barsam/
+Mattermost-RTL/
 ├── plugin.json            # مانیفست پلاگین (id، نسخه، مسیر bundle)
 ├── webapp/dist/main.js    # کل پلاگین — جاوااسکریپت خالص، بدون مرحلهٔ build
-├── public/fonts/          # فونت‌ها؛ از /plugins/com.ibarsam.barsam/public/ سرو می‌شوند
+├── public/fonts/          # فونت‌ها؛ از /plugins/com.github.sysman2007.mattermost-rtl/public/ سرو می‌شوند
 ├── scripts/package.sh     # ساخت فایل tar.gz قابل آپلود
 └── README.md
 ```
@@ -120,7 +120,7 @@ mattermost-plugin-barsam/
 
 ```bash
 ./scripts/package.sh
-# → dist/com.ibarsam.barsam-<version>.tar.gz
+# → dist/com.github.sysman2007.mattermost-rtl-<version>.tar.gz
 ```
 
 نیازمندی‌ها: `bash`، `tar` و `node` (فقط برای `node --check`). روی ویندوز از Git Bash اجرا کنید.
@@ -146,10 +146,10 @@ mattermost-plugin-barsam/
 
 نکات طراحی:
 - **بدون دست‌کاری درخت React:** جهت با attribute `dir`، تاریخ با `::before`، و کادرها با native value setter + رویداد `input` تغییر می‌کنند تا با رندر React تداخل نداشته باشند.
-- **ضد حلقه:** هر پیام فقط وقتی دوباره پردازش می‌شود که امضای محتوایش (`data-barsam-sig`) تغییر کند؛ MutationObserverها با `requestAnimationFrame` دسته‌بندی می‌شوند.
+- **ضد حلقه:** هر پیام فقط وقتی دوباره پردازش می‌شود که امضای محتوایش (`data-mmrtl-sig`) تغییر کند؛ MutationObserverها با `requestAnimationFrame` دسته‌بندی می‌شوند.
 - **RtlMirror** با هر تغییر DOM (با تأخیر ۳۰۰ms) و هر ۳ ثانیه تعداد قوانین را چک می‌کند تا قوانینی که styled-components بعداً با CSSOM اضافه می‌کند هم آینه شوند. قوانینی که خودشان `[dir]` دارند نادیده گرفته می‌شوند.
 - **Forward** از REST API v4 با کوکی نشست و هدر `X-CSRF-Token` (کوکی `MMCSRF`) استفاده می‌کند؛ هیچ اطلاعاتی به سرویس بیرونی نمی‌رود.
-- **تنظیمات** با `registry.registerUserSettings` ثبت و از `preferences` با دستهٔ `pp_com.ibarsam.barsam` خوانده می‌شوند.
+- **تنظیمات** با `registry.registerUserSettings` ثبت و از `preferences` با دستهٔ `pp_com.github.sysman2007.mattermost-rtl` خوانده می‌شوند.
 
 ---
 
@@ -175,7 +175,7 @@ mattermost-plugin-barsam/
 `IRANSansWeb.ttf`، `Yekan.ttf` و `YekanBakhFaEn04Regular.ttf` را قبل از ساخت بسته در `public/fonts/` کپی کنید.
 بدون آن‌ها، انتخاب این فونت‌ها در تنظیمات به فونت جایگزین برمی‌گردد.
 
-مجوز کد این مخزن هنوز تعیین نشده است.
+کد این مخزن تحت مجوز [Apache License 2.0](LICENSE) منتشر شده است (فونت‌ها مجوز خودشان را دارند).
 
 ---
 
@@ -183,6 +183,7 @@ mattermost-plugin-barsam/
 
 | نسخه | تغییرات |
 |---|---|
+| 1.5.2 | رفع جهت معکوس درگ کردن جداکنندهٔ پنل پاسخ (و منوی کناری) هنگام تغییر اندازه در RTL |
 | 1.5.1 | فاصلهٔ متن از لبهٔ کادر نوشتن در RTL؛ برعکس شدن آیکن ارسال و پیش‌نویس‌ها در RTL |
 | 1.5.0 | آینه‌ساز CSS برای چیدمان کامل RTL (پنل‌های کناری، ویرایشگر، جستجو، سایدبار) |
 | 1.4.0 | جهت کل صفحه «خودکار بر اساس زبان» به‌عنوان پیش‌فرض |
