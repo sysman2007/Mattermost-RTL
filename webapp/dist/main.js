@@ -611,6 +611,7 @@
     const dir = s.page_dir === 'auto' ? (isFa() ? 'rtl' : 'site-default') : s.page_dir;
     applyPageDir(dir);
     RtlMirror.configure(dir === 'rtl');
+    ResizeFlip.configure(dir === 'rtl');
     Bidi.configure({ enabled: s.bidi === 'smart', hover: s.hover !== 'off' });
     const off = s.sidebar_toggle !== 'on';
     document.documentElement.classList.toggle('mmrtl-lhs-disabled', off);
@@ -1128,6 +1129,59 @@
     return { configure, schedule };
   })();
 
+  // ── Resize flip: Mattermost's LHS/RHS resize handles compute the new width
+  // from horizontal mouse movement assuming LTR placement. Once the page is
+  // mirrored the panels swap sides, so a drag moves the splitter the wrong way.
+  // While a drag that started on a resize handle is in progress, reflect the
+  // pointer's X coordinates around the drag start point before Mattermost's
+  // listeners see them.
+  const ResizeFlip = (() => {
+    const CURSORS = new Set(['col-resize', 'ew-resize', 'e-resize', 'w-resize']);
+    const DOWN = ['mousedown', 'pointerdown'];
+    const MOVE = ['mousemove', 'pointermove', 'mouseup', 'pointerup'];
+    // pointerup precedes mouseup, so the drag ends on mouseup to flip both.
+    const END = ['mouseup', 'pointercancel', 'blur'];
+    const X_PROPS = ['clientX', 'pageX', 'screenX', 'x'];
+    let on = false;
+    let start = null; // { clientX, pageX, screenX, x } at drag start
+
+    function isHandle(t) {
+      return t instanceof Element && CURSORS.has(getComputedStyle(t).cursor);
+    }
+
+    function onDown(e) {
+      start = null;
+      if (e.button !== 0 || document.documentElement.getAttribute('dir') !== 'rtl') return;
+      if (!isHandle(e.target)) return;
+      start = {};
+      for (const k of X_PROPS) start[k] = e[k];
+    }
+
+    function onMove(e) {
+      if (!start) return;
+      for (const k of X_PROPS) {
+        Object.defineProperty(e, k, { value: 2 * start[k] - e[k], configurable: true });
+      }
+      if (typeof e.movementX === 'number') {
+        Object.defineProperty(e, 'movementX', { value: -e.movementX, configurable: true });
+      }
+    }
+
+    function onEnd() { start = null; }
+
+    function configure(enabled) {
+      if (enabled === on) return;
+      on = enabled;
+      const fn = on ? addEventListener : removeEventListener;
+      for (const t of DOWN) fn(t, onDown, true);
+      for (const t of MOVE) fn(t, onMove, true);
+      for (const t of END) fn(t, onEnd, false);
+      start = null;
+    }
+
+    return { configure };
+  })();
+
   class Plugin {
     initialize(registry, reduxStore) {
       store = reduxStore;
@@ -1179,6 +1233,7 @@
       Bidi.configure({ enabled: false, hover: false });
       applyPageDir('site-default');
       RtlMirror.configure(false);
+      ResizeFlip.configure(false);
       document.getElementById('mmrtl-style')?.remove();
       document.documentElement.classList.remove('mmrtl-lhs-collapsed', 'mmrtl-lhs-open');
     }

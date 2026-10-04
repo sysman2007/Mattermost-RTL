@@ -2,7 +2,7 @@
 
 # Mattermost RTL — پلاگین فارسی‌سازی Mattermost
 
-![version](https://img.shields.io/badge/version-1.5.1-5b6af8)
+![version](https://img.shields.io/badge/version-1.5.2-5b6af8)
 ![mattermost](https://img.shields.io/badge/Mattermost-9.0%2B%20(tested%2011.11)-0058cc)
 ![type](https://img.shields.io/badge/plugin-webapp--only-a855f7)
 
@@ -183,6 +183,7 @@ Mattermost-RTL/
 
 | نسخه | تغییرات |
 |---|---|
+| 1.5.2 | رفع جهت معکوس درگ کردن جداکنندهٔ پنل پاسخ (و منوی کناری) هنگام تغییر اندازه در RTL |
 | 1.5.1 | فاصلهٔ متن از لبهٔ کادر نوشتن در RTL؛ برعکس شدن آیکن ارسال و پیش‌نویس‌ها در RTL |
 | 1.5.0 | آینه‌ساز CSS برای چیدمان کامل RTL (پنل‌های کناری، ویرایشگر، جستجو، سایدبار) |
 | 1.4.0 | جهت کل صفحه «خودکار بر اساس زبان» به‌عنوان پیش‌فرض |
