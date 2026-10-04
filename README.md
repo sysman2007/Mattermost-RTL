@@ -111,6 +111,7 @@ Mattermost-RTL/
 ├── webapp/dist/main.js    # کل پلاگین — جاوااسکریپت خالص، بدون مرحلهٔ build
 ├── public/fonts/          # فونت‌ها؛ از /plugins/com.github.sysman2007.mattermost-rtl/public/ سرو می‌شوند
 ├── scripts/package.sh     # ساخت فایل tar.gz قابل آپلود
+├── docs/design/           # طرح‌های فنی قابلیت‌های پیشنهادی (مثل read-receipts.md)
 └── README.md
 ```
 
