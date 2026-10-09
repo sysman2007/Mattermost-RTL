@@ -514,8 +514,9 @@
   })();
 
   // ── Collapsible left sidebar (Mattermost): click the header logo to toggle.
-  // Desktop starts open, mobile-size starts collapsed; a manual toggle holds
-  // until the viewport crosses the breakpoint.
+  // Desktop only and starts open; at mobile width Mattermost's own hamburger
+  // menu is left in charge. A manual toggle holds until the viewport crosses
+  // the breakpoint.
 
   const Sidebar = (() => {
     const LOGO = '#global-header [class^="ProductBranding"], #global-header [class*=" ProductBranding"], #global-header [class*="StyledLogo"]';
@@ -535,14 +536,12 @@
       st.id = 'mmrtl-lhs-style';
       st.textContent = `
         #global-header [class^="ProductBranding"], #global-header [class*=" ProductBranding"] { cursor: pointer; }
-        html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) #SidebarContainer { display: none !important; }
-        html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) .main-wrapper { grid-template-columns: 0 minmax(0, 1fr) auto !important; }
-        @media (max-width: 768px) {
-          html.mmrtl-lhs-open:not(.mmrtl-lhs-disabled) #SidebarContainer {
-            display: flex !important; position: fixed !important; top: 0; bottom: 0;
-            inset-inline-start: 0; width: 264px !important; z-index: 1000; transform: none !important;
-            box-shadow: 0 0 24px rgba(0,0,0,.3);
-          }
+        /* Desktop only: at mobile width Mattermost switches .main-wrapper to a
+           single "main" grid area and runs its own off-canvas sidebar, so a
+           three-column override there squeezes the channel view to 0px. */
+        @media (min-width: 769px) {
+          html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) #SidebarContainer { display: none !important; }
+          html.mmrtl-lhs-collapsed:not(.mmrtl-lhs-disabled) .main-wrapper { grid-template-columns: 0 minmax(0, 1fr) auto !important; }
         }`;
       (document.head || document.documentElement).appendChild(st);
     }
@@ -1051,7 +1050,33 @@
           decls.push(`${p}: ${v === 'left' ? 'right' : 'left'}${imp}`);
         }
       }
+      const tf = style.getPropertyValue('transform');
+      const flipped = tf && flipTransform(tf);
+      if (flipped) decls.push(`transform: ${flipped}${style.getPropertyPriority('transform') ? ' !important' : ''}`);
       return decls;
+    }
+
+    // Negate the horizontal part of translate()/translateX()/translate3d(),
+    // e.g. the mobile off-canvas sidebar's translate3d(-290px, 0, 0). Paired
+    // with the left↔right swap this keeps centring tricks like
+    // `left: 50%; transform: translateX(-50%)` correct.
+    function negate(x) {
+      if (/^[+-]?0(\.0+)?([a-z%]*)$/i.test(x)) return null;
+      if (/^(calc|var|min|max|clamp)\(/i.test(x)) return `calc(-1 * ${x})`;
+      return x.startsWith('-') ? x.slice(1) : `-${x.replace(/^\+/, '')}`;
+    }
+
+    // Any rule with a translate is re-emitted, even a zero one, so state rules
+    // like `.move--right { translate3d(0, 0, 0) }` keep winning over the
+    // (now more specific) mirrored base rule.
+    function flipTransform(value) {
+      let found = false;
+      const out = value.replace(/\b(translateX|translate3d|translate)\(\s*((?:calc|var|min|max|clamp)\([^()]*(?:\([^()]*\)[^()]*)*\)|[^,()\s]+)/gi, (m, fn, x) => {
+        found = true;
+        const n = negate(x);
+        return n === null ? m : `${fn}(${n}`;
+      });
+      return found ? out : null;
     }
 
     function walk(rules, out) {
