@@ -360,6 +360,12 @@
       setOpen(false);
     });
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !toc.hidden) setOpen(false); });
+    // Close on any click outside the panel and its button, and when focus
+    // leaves the frame (a click elsewhere in the Mattermost preview window).
+    document.addEventListener('pointerdown', e => {
+      if (!toc.hidden && !toc.contains(e.target) && !btn.contains(e.target)) setOpen(false);
+    });
+    window.addEventListener('blur', () => { if (!toc.hidden) setOpen(false); });
     document.body.prepend(btn, toc);
   }
 
