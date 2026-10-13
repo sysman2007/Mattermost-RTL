@@ -46,3 +46,12 @@ pre code { white-space: pre; }
 .mermaid-source pre { border-radius: 8px; padding: 10px; }
 .diagram-error { color: #ef4444; font: 13px/1.6 Consolas, monospace; direction: ltr; text-align: left; }
 .mmd-line { display: block; unicode-bidi: plaintext; }
+#toc-toggle { position: fixed; top: 10px; inset-inline-start: 10px; z-index: 11; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 18px; cursor: pointer; }
+#toc-toggle:hover, #toc-toggle[aria-expanded=true] { background: var(--surface2); }
+#toc { position: fixed; top: 54px; inset-inline-start: 10px; bottom: 10px; z-index: 10; width: min(300px, calc(100vw - 20px)); overflow: auto; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
+#toc[hidden] { display: none; }
+#toc a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 14px; line-height: 1.6; }
+#toc a:hover { background: var(--surface2); }
+#toc a[dir=rtl] { font-family: Vazirmatn, Tahoma, sans-serif; }
+#toc .lv2 { padding-inline-start: 20px; } #toc .lv3 { padding-inline-start: 32px; } #toc .lv4, #toc .lv5, #toc .lv6 { padding-inline-start: 44px; color: var(--muted); }
+body:has(#toc-toggle) { padding-top: 56px; }

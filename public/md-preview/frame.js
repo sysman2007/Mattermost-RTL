@@ -319,7 +319,7 @@
   async function render({ md, theme, font }) {
     document.body.dataset.theme = theme === 'dark' ? 'dark' : 'light';
     await loadFont(font);
-    const { html } = parse(String(md || ''));
+    const { html, headings } = parse(String(md || ''));
     const article = document.createElement('article');
     article.id = 'content';
     article.innerHTML = html;
@@ -328,7 +328,39 @@
     directionize(article);
     highlightCode(article);
     wireLinks(article);
+    buildToc(headings);
     await renderMermaid(article);
+  }
+
+  // Table of contents: a side panel of the headings, closed by default and
+  // toggled with the ☰ button. Only shown when the file has 2+ headings.
+  function buildToc(headings) {
+    if (headings.length < 2) return;
+    const toc = document.createElement('nav');
+    toc.id = 'toc';
+    toc.hidden = true;
+    toc.innerHTML = headings.map(h => `<a class="lv${h.level}" href="#${escapeHtml(encodeURIComponent(h.id))}">${escapeHtml(h.text)}</a>`).join('');
+    toc.querySelectorAll('a').forEach(a => { a.dir = RTL_RE.test(a.textContent) ? 'rtl' : 'ltr'; });
+    const btn = document.createElement('button');
+    btn.id = 'toc-toggle';
+    btn.type = 'button';
+    btn.textContent = '☰';
+    btn.title = 'Contents';
+    btn.setAttribute('aria-controls', 'toc');
+    btn.setAttribute('aria-expanded', 'false');
+    const setOpen = open => { toc.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
+    btn.addEventListener('click', () => setOpen(toc.hidden));
+    toc.addEventListener('click', e => {
+      const a = e.target.closest('a');
+      if (!a) return;
+      e.preventDefault();
+      let id = a.getAttribute('href').slice(1);
+      try { id = decodeURIComponent(id); } catch (err) { /* keep raw */ }
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setOpen(false);
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !toc.hidden) setOpen(false); });
+    document.body.prepend(btn, toc);
   }
 
   // Exactly one render per frame: later messages (for example from a page this
