@@ -580,7 +580,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on' };
   let last = '';
   let sidebarOn = false;
 
@@ -618,6 +618,7 @@
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
+    MdPreview.configure(s.md_preview === 'on');
     applyCodeBlocksLTR();
   }
 
@@ -1331,6 +1332,122 @@
     return { configure };
   })();
 
+  // ── Markdown file preview: .md/.markdown/.mdx attachments open rendered
+  // (Persian-aware direction, code highlighting, Mermaid) instead of as raw text.
+  // The file is rendered inside a sandboxed iframe with an opaque origin and a
+  // strict CSP, so a hostile file can't reach the session, cookies or API.
+  // The parent fetches the text with the user's session and posts it once.
+  const MdPreview = (() => {
+    const EXT = /^(md|markdown|mdx)$/i;
+    const MAX_BYTES = 2 * 1024 * 1024;
+    const DIR = () => `${basePath}/plugins/${PLUGIN_ID}/public/md-preview/`;
+    let enabled = true;
+    let fontBytes = null;
+
+    const isMarkdown = fileInfo => enabled && Boolean(fileInfo) && EXT.test(fileInfo.extension || '');
+
+    function theme() {
+      const rgb = getComputedStyle(document.body).getPropertyValue('--center-channel-bg-rgb').split(',').map(Number);
+      if (rgb.length !== 3 || rgb.some(Number.isNaN)) return 'light';
+      return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) < 128 ? 'dark' : 'light';
+    }
+
+    function srcdoc() {
+      const base = `${location.origin}${DIR()}`;
+      const csp = [
+        "default-src 'none'",
+        `script-src ${base}`,
+        `style-src ${base} 'unsafe-inline'`, // Mermaid writes inline styles into its SVGs
+        'img-src https: http: data:',
+        'font-src data:'
+      ].join('; ');
+      return `<!doctype html><html><head><meta charset="utf-8">` +
+        `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
+        `<meta name="referrer" content="no-referrer">` +
+        `<link rel="stylesheet" href="${base}frame.css">` +
+        `<script src="${base}vendor/prism.js"></script><script src="${base}frame.js"></script>` +
+        `</head><body></body></html>`;
+    }
+
+    async function loadFont() {
+      if (fontBytes) return fontBytes.slice(0);
+      try {
+        const res = await fetch(`${basePath}/plugins/${PLUGIN_ID}/public/fonts/Vazirmatn-Regular.ttf`, { credentials: 'same-origin' });
+        if (res.ok) fontBytes = await res.arrayBuffer();
+      } catch (e) { /* frame falls back to system fonts */ }
+      return fontBytes ? fontBytes.slice(0) : null;
+    }
+
+    async function loadText(fileInfo) {
+      if (fileInfo.size > MAX_BYTES) throw new Error('too-large');
+      const res = await fetch(`${basePath}/api/v4/files/${encodeURIComponent(fileInfo.id)}`, {
+        credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      return res.text();
+    }
+
+    function Component(props) {
+      const React = window.React;
+      const { useEffect, useRef, useState, createElement: h } = React;
+      const frameRef = useRef(null);
+      const [error, setError] = useState(null);
+      const fileInfo = props.fileInfo;
+
+      useEffect(() => {
+        let alive = true;
+        let sent = false;
+        const data = Promise.all([loadText(fileInfo), loadFont()]);
+        data.catch(e => { if (alive) setError(e.message === 'too-large' ? 'too-large' : 'load'); });
+        const onMessage = async e => {
+          const win = frameRef.current?.contentWindow;
+          if (sent || !win || e.source !== win || e.data?.type !== 'mmrtl-md-ready') return;
+          sent = true; // one render per frame; never re-send the file
+          try {
+            const [md, font] = await data;
+            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, theme: theme(), font }, '*', font ? [font] : []);
+          } catch (err) { /* error state already set */ }
+        };
+        window.addEventListener('message', onMessage);
+        return () => { alive = false; window.removeEventListener('message', onMessage); };
+      }, [fileInfo.id]);
+
+      if (error) {
+        return h('div', { className: 'mmrtl-md-error', dir: 'auto' }, error === 'too-large'
+          ? L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 2 MB). Download it instead.')
+          : L('بارگذاری فایل ممکن نشد.', 'The file could not be loaded.'));
+      }
+      return h('iframe', {
+        ref: frameRef,
+        className: 'mmrtl-md-frame',
+        title: fileInfo.name,
+        sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox',
+        referrerPolicy: 'no-referrer',
+        srcDoc: srcdoc()
+      });
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-md-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-md-style';
+      st.textContent = `
+        .mmrtl-md-frame { display: block; width: min(1100px, 92vw); height: calc(100vh - 140px); border: 0; border-radius: 8px; background: transparent; }
+        .mmrtl-md-error { padding: 32px; color: rgba(var(--center-channel-color-rgb), 0.8); background: var(--center-channel-bg); border-radius: 8px; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    function register(registry) {
+      if (typeof registry.registerFilePreviewComponent !== 'function' || !window.React) return;
+      injectCSS();
+      registry.registerFilePreviewComponent(isMarkdown, Component);
+    }
+
+    function configure(on) { enabled = on; }
+
+    return { register, configure, isMarkdown };
+  })();
+
   class Plugin {
     initialize(registry, reduxStore) {
       store = reduxStore;
@@ -1350,6 +1467,7 @@
             { title: 'رنگ قلم پیام‌ها', settings: [radio('text_color', 'رنگ قلم پیام‌ها', 'لینک‌ها، منشن‌ها و کدها رنگ خودشان را نگه می‌دارند. برای تم تیره رنگ‌های روشن را انتخاب کنید.', [['site-default', 'پیش‌فرض تم'], ['#000000', 'مشکی'], ['#1f2937', 'خاکستری تیره'], ['#1e3a8a', 'سرمه‌ای'], ['#065f46', 'سبز تیره'], ['#6b21a8', 'بنفش'], ['#7c2d12', 'قهوه‌ای'], ['#b91c1c', 'قرمز تیره'], ['#e5e7eb', 'خاکستری روشن (تم تیره)'], ['#ffffff', 'سفید (تم تیره)'], ['#fde68a', 'کرمی (تم تیره)']])] },
             { title: 'تاریخ پیام‌ها', settings: [radio('timestamp', 'نمایش زمان پیام', 'تاریخ بر اساس زبان Mattermost نمایش داده می‌شود (فارسی: شمسی).', [['full', 'تاریخ و ساعت کامل'], ['time', 'فقط ساعت (پیش‌فرض Mattermost)']])] },
             { title: 'اصلاح متن فارسی', settings: [radio('fa_fix', 'اصلاح خودکار هنگام نوشتن', 'ي و ك عربی ← ی و ک فارسی، ارقام عربی ← فارسی، نیم‌فاصله در «می/نمی» و «ها». متن داخل کد تغییر نمی‌کند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
+            { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
@@ -1357,6 +1475,7 @@
       }
       const React = window.React;
       const SendToLabel = () => L('ارسال به…', 'Send to…');
+      MdPreview.register(registry);
       registry.registerPostDropdownMenuAction(
         React ? React.createElement(SendToLabel) : L('ارسال به…', 'Send to…'),
         postId => Forward.open(postId),
