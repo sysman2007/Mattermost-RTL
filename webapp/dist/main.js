@@ -580,7 +580,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on' };
   let last = '';
   let sidebarOn = false;
 
@@ -617,6 +617,7 @@
     if (!sidebarOn) { sidebarOn = true; Sidebar.start(); }
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
+    ContextMenu.configure(s.context_menu === 'on');
     applyCodeBlocksLTR();
   }
 
@@ -1160,6 +1161,129 @@
   // While a drag that started on a resize handle is in progress, reflect the
   // pointer's X coordinates around the drag start point before Mattermost's
   // listeners see them.
+  // ── Right-click menu on posts: opens Mattermost's own "…" (dot) menu at the
+  // cursor, with the hover-bar buttons (recent reactions, add reaction, reply,
+  // apps…) as a row on top. Nothing is re-implemented: every entry clicks the
+  // native control, so permissions, plugin items and shortcuts stay Mattermost's.
+  // The browser's own menu is kept for links, images, media, code, inputs,
+  // selected text, and Shift+right-click.
+  const ContextMenu = (() => {
+    let on = false;
+    const NATIVE = 'a, img, video, audio, canvas, svg image, input, textarea, select, [contenteditable="true"], pre, code, ' +
+      '.file-preview, .post-image, .post-image__column, .file-attachment, .markdown-inline-img, .attachment__image';
+
+    // Pure: menu position for a click at (x, y), kept inside the viewport.
+    // In RTL the menu opens to the left of the cursor, like native RTL menus.
+    function placeMenu(x, y, w, h, vw, vh, rtl) {
+      const M = 4;
+      let left = rtl ? x - w : x;
+      if (left + w > vw - M) left = x - w;
+      if (left < M) left = Math.min(x, vw - w - M);
+      let top = y;
+      if (top + h > vh - M) top = y - h;
+      if (top < M) top = Math.max(M, vh - h - M);
+      return { left: Math.max(M, left), top: Math.max(M, top) };
+    }
+
+    function wantsNative(e) {
+      if (e.shiftKey) return true;
+      if (e.target.closest?.(NATIVE)) return true;
+      const sel = window.getSelection?.();
+      return Boolean(sel && !sel.isCollapsed && sel.toString().trim());
+    }
+
+    const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+
+    async function waitFor(fn, frames = 20) {
+      for (let i = 0; i < frames; i++) {
+        const v = fn();
+        if (v) return v;
+        await nextFrame();
+      }
+      return null;
+    }
+
+    function closeMenu(list) {
+      list.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+    }
+
+    // Copies of the hover-bar buttons; each forwards the click to the original,
+    // which stays mounted while the dot menu is open.
+    function quickBar(bar, dotBtn, list) {
+      const row = document.createElement('div');
+      row.className = 'mmrtl-cm-quick';
+      row.setAttribute('role', 'group');
+      for (const orig of bar.querySelectorAll('button')) {
+        if (orig === dotBtn || dotBtn.contains(orig) || orig.disabled) continue;
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'mmrtl-cm-btn';
+        copy.innerHTML = orig.innerHTML;
+        copy.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+        const label = orig.getAttribute('aria-label') || '';
+        if (label) { copy.title = label; copy.setAttribute('aria-label', label); }
+        copy.addEventListener('click', ev => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          orig.click();
+          closeMenu(list);
+        });
+        row.appendChild(copy);
+      }
+      return row.childElementCount ? row : null;
+    }
+
+    async function onContextMenu(e) {
+      if (!on || e.defaultPrevented || wantsNative(e)) return;
+      const post = e.target.closest?.('.post');
+      if (!post || post.querySelector('textarea') || e.target.closest('.post-menu')) return;
+      const bar = post.querySelector('.post-menu');
+      // The dot ("…") menu only: the Apps button's id also contains "_button_".
+      const dotBtn = bar?.querySelector('button[data-testid^="PostDotMenu-Button-"]') ||
+        [...(bar?.querySelectorAll('button[aria-haspopup="true"]') || [])].find(b => /^[A-Z_]+_button_[a-z0-9]+$/.test(b.id));
+      if (!dotBtn) return; // no menu for this post (system/ephemeral/failed) → browser menu
+      e.preventDefault();
+      const { clientX: x, clientY: y } = e;
+      dotBtn.click();
+
+      const menuId = dotBtn.getAttribute('aria-controls') || dotBtn.id.replace('_button_', '_dropdown_');
+      const list = await waitFor(() => document.getElementById(menuId));
+      if (!list || list.closest('.menuModal')) return; // mobile layout: leave the modal sheet alone
+      const paper = list.closest('.MuiPaper-root, .MuiPopover-paper') || list.parentElement;
+      if (!paper) return;
+
+      const row = quickBar(bar, dotBtn, list);
+      if (row) paper.insertBefore(row, paper.firstChild);
+      await nextFrame(); // let MUI finish its own anchor positioning first, then override it
+
+      const rtl = document.documentElement.dir === 'rtl';
+      const { left, top } = placeMenu(x, y, paper.offsetWidth, paper.offsetHeight, innerWidth, innerHeight, rtl);
+      paper.style.left = `${left}px`;
+      paper.style.top = `${top}px`;
+      paper.style.transformOrigin = `${rtl ? 'right' : 'left'} top`;
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-cm-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-cm-style';
+      st.textContent = `
+        .mmrtl-cm-quick { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 8px; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.12); }
+        .mmrtl-cm-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 4px; border: 0; border-radius: 4px; background: transparent; color: rgba(var(--center-channel-color-rgb), 0.64); cursor: pointer; }
+        .mmrtl-cm-btn:hover, .mmrtl-cm-btn:focus-visible { background: rgba(var(--center-channel-color-rgb), 0.08); color: rgba(var(--center-channel-color-rgb), 0.8); }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    function configure(enabled) {
+      if (enabled === on) return;
+      on = enabled;
+      if (on) { injectCSS(); document.addEventListener('contextmenu', onContextMenu, true); }
+      else document.removeEventListener('contextmenu', onContextMenu, true);
+    }
+
+    return { configure, placeMenu };
+  })();
+
   const ResizeFlip = (() => {
     const CURSORS = new Set(['col-resize', 'ew-resize', 'e-resize', 'w-resize']);
     const DOWN = ['mousedown', 'pointerdown'];
@@ -1226,6 +1350,7 @@
             { title: 'رنگ قلم پیام‌ها', settings: [radio('text_color', 'رنگ قلم پیام‌ها', 'لینک‌ها، منشن‌ها و کدها رنگ خودشان را نگه می‌دارند. برای تم تیره رنگ‌های روشن را انتخاب کنید.', [['site-default', 'پیش‌فرض تم'], ['#000000', 'مشکی'], ['#1f2937', 'خاکستری تیره'], ['#1e3a8a', 'سرمه‌ای'], ['#065f46', 'سبز تیره'], ['#6b21a8', 'بنفش'], ['#7c2d12', 'قهوه‌ای'], ['#b91c1c', 'قرمز تیره'], ['#e5e7eb', 'خاکستری روشن (تم تیره)'], ['#ffffff', 'سفید (تم تیره)'], ['#fde68a', 'کرمی (تم تیره)']])] },
             { title: 'تاریخ پیام‌ها', settings: [radio('timestamp', 'نمایش زمان پیام', 'تاریخ بر اساس زبان Mattermost نمایش داده می‌شود (فارسی: شمسی).', [['full', 'تاریخ و ساعت کامل'], ['time', 'فقط ساعت (پیش‌فرض Mattermost)']])] },
             { title: 'اصلاح متن فارسی', settings: [radio('fa_fix', 'اصلاح خودکار هنگام نوشتن', 'ي و ك عربی ← ی و ک فارسی، ارقام عربی ← فارسی، نیم‌فاصله در «می/نمی» و «ها». متن داخل کد تغییر نمی‌کند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
+            { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
         });
@@ -1259,10 +1384,13 @@
       applyPageDir('site-default');
       RtlMirror.configure(false);
       ResizeFlip.configure(false);
+      ContextMenu.configure(false);
       document.getElementById('mmrtl-style')?.remove();
       document.documentElement.classList.remove('mmrtl-lhs-collapsed', 'mmrtl-lhs-open');
     }
   }
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
+  // Node unit tests only; in the browser `module` is undefined.
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu };
 })();
