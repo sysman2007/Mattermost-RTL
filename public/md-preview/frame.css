@@ -1,0 +1,48 @@
+/* Mattermost RTL — Markdown preview (inside the sandboxed frame). Colors follow
+   the Mattermost theme passed in as body[data-theme]. Adapted from Maestro
+   Markdown Viewer (Apache-2.0). */
+:root { --bg:#f7f8fa; --surface:#fff; --surface2:#f1f3f5; --text:#20242a; --muted:#6b7280; --border:#dfe3e8; --accent:#1c58d9; --code:#161b22; --codeText:#e6edf3; }
+body[data-theme=dark] { --bg:#0d1117; --surface:#151b23; --surface2:#1c2430; --text:#e6edf3; --muted:#9da7b3; --border:#2b3542; --accent:#7aa7ff; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 16px/1.85 system-ui, -apple-system, "Segoe UI", Vazirmatn, Tahoma, sans-serif; padding: 24px 16px 48px; }
+article { max-width: 980px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: clamp(16px, 4vw, 48px); overflow-wrap: anywhere; }
+[dir=rtl] { text-align: right; font-family: Vazirmatn, Tahoma, sans-serif; }
+[dir=ltr] { text-align: left; }
+h1, h2, h3 { line-height: 1.35; }
+h1 { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: .3em; }
+p, li { margin: .6em 0; }
+a { color: var(--accent); }
+img { max-width: 100%; height: auto; border-radius: 8px; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+blockquote { margin: 1.2em 0; padding: 8px 16px; background: var(--surface2); border-inline-start: 4px solid var(--accent); border-radius: 8px; color: var(--muted); }
+li.task { list-style: none; }
+.table-wrap { overflow: auto; margin: 1.2em 0; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+th { background: var(--surface2); }
+:not(pre) > code { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: .1em .35em; font-size: .88em; font-family: Consolas, "Cascadia Code", monospace; unicode-bidi: isolate; }
+.code-card { margin: 1.2em 0; border: 1px solid #303a49; border-radius: 10px; overflow: hidden; background: var(--code); direction: ltr; }
+.code-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 12px; color: #9da7b3; font: 12px/2 system-ui, sans-serif; border-bottom: 1px solid #303a49; }
+.copy-code { background: transparent; color: inherit; border: 1px solid #303a49; border-radius: 6px; padding: 0 10px; cursor: pointer; font: inherit; }
+.copy-code:hover { color: #e6edf3; }
+.code-body { display: flex; }
+pre { margin: 0; background: var(--code); color: var(--codeText); font: 13.5px/1.7 Consolas, "Cascadia Code", "JetBrains Mono", monospace; tab-size: 4; }
+.code-gutter { flex: none; padding: 12px 10px; text-align: right; color: #596777; border-right: 1px solid #303a49; user-select: none; }
+.code-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; padding: 12px 14px; }
+pre code { white-space: pre; }
+.token.comment, .token.prolog, .token.doctype, .token.cdata { color: #7d8998; font-style: italic; }
+.token.punctuation { color: #c9d1d9; }
+.token.property, .token.tag, .token.constant, .token.symbol, .token.deleted { color: #ff7b72; }
+.token.boolean, .token.number { color: #79c0ff; }
+.token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: #a5d6ff; }
+.token.operator, .token.entity, .token.url { color: #ff7b72; }
+.token.atrule, .token.attr-value, .token.keyword { color: #ff7b72; }
+.token.function, .token.class-name { color: #d2a8ff; }
+.token.regex, .token.important, .token.variable { color: #ffa657; }
+.mermaid-card { margin: 1.2em 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); text-align: center; }
+.mermaid-source { text-align: left; direction: ltr; margin-top: 8px; color: var(--muted); }
+.mermaid-source pre { border-radius: 8px; padding: 10px; }
+.diagram-error { color: #ef4444; font: 13px/1.6 Consolas, monospace; direction: ltr; text-align: left; }
+.mmd-line { display: block; unicode-bidi: plaintext; }
