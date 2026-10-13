@@ -316,9 +316,112 @@
     } catch (e) { /* system fallback */ }
   }
 
-  async function render({ md, theme, font }) {
+  // ── CSV / TSV ──
+  const MAX_TABLE_ROWS = 2000;
+
+  // Delimiter: the candidate that occurs most often (outside quotes) in the
+  // first non-empty line. TSV files always use tabs.
+  function detectDelimiter(text, ext) {
+    if (/^tsv$/i.test(ext || '')) return '\t';
+    const line = (text.split('\n').find(l => l.trim()) || '').replace(/"[^"]*"/g, '');
+    let best = ',', count = 0;
+    for (const d of [',', ';', '\t', '|']) {
+      const n = line.split(d).length - 1;
+      if (n > count) { best = d; count = n; }
+    }
+    return best;
+  }
+
+  // RFC 4180: quoted fields may contain the delimiter, newlines and "" escapes.
+  function parseCsv(text, delim, maxRows = MAX_TABLE_ROWS) {
+    text = String(text).replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [], field = '', quoted = false, i = 0, truncated = false;
+    const endRow = () => {
+      row.push(field); field = '';
+      if (!(row.length === 1 && row[0] === '')) rows.push(row);
+      row = [];
+    };
+    while (i < text.length) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+          quoted = false; i++; continue;
+        }
+        field += c; i++; continue;
+      }
+      if (c === '"' && field === '') { quoted = true; i++; continue; }
+      if (c === delim) { row.push(field); field = ''; i++; continue; }
+      if (c === '\r' || c === '\n') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        i++;
+        endRow();
+        if (rows.length > maxRows) { truncated = true; break; }
+        continue;
+      }
+      field += c; i++;
+    }
+    if (!truncated && (field !== '' || row.length)) endRow();
+    if (rows.length > maxRows) { rows.length = maxRows; truncated = true; }
+    return { rows, truncated };
+  }
+
+  const NUMERIC = /^[-+]?[\d\u06F0-\u06F9\u0660-\u0669][\d\u06F0-\u06F9\u0660-\u0669,.\u066B\u066C٬٫]*%?$/;
+
+  function renderCsv(text, ext) {
+    const delim = detectDelimiter(text, ext);
+    const { rows, truncated } = parseCsv(text, delim);
+    const cols = rows.reduce((m, r) => Math.max(m, r.length), 0);
+    const [head = [], ...body] = rows;
+    const cell = (tag, v) => {
+      // Numbers (including Persian digits) stay LTR; otherwise any Persian letter → RTL.
+      const isNum = NUMERIC.test(v.trim());
+      const dir = !isNum && RTL_RE.test(v) ? 'rtl' : 'ltr';
+      return `<${tag} dir="${dir}"${isNum ? ' class="num"' : ''}>${escapeHtml(v)}</${tag}>`;
+    };
+    const pad = r => r.concat(Array(Math.max(0, cols - r.length)).fill(''));
+    const delimName = { ',': 'comma', ';': 'semicolon', '\t': 'tab', '|': 'pipe' }[delim];
+    return `<div class="data-info" dir="ltr">${body.length} rows × ${cols} columns · ${delimName}-separated` +
+      (truncated ? ` · <strong>showing the first ${MAX_TABLE_ROWS} rows</strong>` : '') + '</div>' +
+      `<div class="table-wrap data-table"><table><thead><tr><th class="rownum">#</th>${pad(head).map(v => cell('th', v)).join('')}</tr></thead>` +
+      `<tbody>${body.map((r, n) => `<tr><td class="rownum">${n + 1}</td>${pad(r).map(v => cell('td', v)).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }
+
+  // ── JSON ──
+  const MAX_HIGHLIGHT = 512 * 1024;
+
+  function renderJson(text) {
+    text = String(text).replace(/^\uFEFF/, '');
+    let value, error = null;
+    try { value = JSON.parse(text); } catch (e) { error = e.message; }
+    if (error) {
+      return `<div class="data-info data-error" dir="ltr">Invalid JSON: ${escapeHtml(error)}</div>` +
+        `<figure class="code-card"><div class="code-body"><pre class="code-scroll"><code class="language-text">${escapeHtml(text)}</code></pre></div></figure>`;
+    }
+    const pretty = JSON.stringify(value, null, 2);
+    const kind = Array.isArray(value) ? `array · ${value.length} items` : value && typeof value === 'object' ? `object · ${Object.keys(value).length} keys` : typeof value;
+    const lines = pretty.split('\n').length;
+    const lang = pretty.length > MAX_HIGHLIGHT ? 'text' : 'json';
+    return `<div class="data-info" dir="ltr">${escapeHtml(kind)} · ${lines} lines</div>` +
+      `<figure class="code-card"><div class="code-head"><span class="language-label">json</span><button type="button" class="copy-code">Copy</button></div>` +
+      `<div class="code-body"><pre class="code-scroll"><code class="language-${lang}">${escapeHtml(pretty)}</code></pre></div></figure>`;
+  }
+
+  async function render({ md, kind, ext, theme, font }) {
     document.body.dataset.theme = theme === 'dark' ? 'dark' : 'light';
     await loadFont(font);
+    if (kind === 'csv' || kind === 'json') {
+      const article = document.createElement('article');
+      article.id = 'content';
+      article.className = `data-view data-${kind}`;
+      article.innerHTML = kind === 'csv' ? renderCsv(String(md || ''), ext) : renderJson(md);
+      document.body.textContent = '';
+      document.body.appendChild(article);
+      highlightCode(article);
+      wireLinks(article);
+      return;
+    }
     const { html, headings } = parse(String(md || ''));
     const article = document.createElement('article');
     article.id = 'content';
@@ -381,5 +484,5 @@
     window.parent.postMessage({ type: 'mmrtl-md-ready' }, '*');
   }
 
-  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc };
+  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc, detectDelimiter, parseCsv, renderCsv, renderJson };
 })();

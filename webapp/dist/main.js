@@ -580,7 +580,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on' };
   let last = '';
   let sidebarOn = false;
 
@@ -618,7 +618,7 @@
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
-    MdPreview.configure(s.md_preview === 'on');
+    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on' });
     applyCodeBlocksLTR();
   }
 
@@ -1332,19 +1332,24 @@
     return { configure };
   })();
 
-  // ── Markdown file preview: .md/.markdown/.mdx attachments open rendered
-  // (Persian-aware direction, code highlighting, Mermaid) instead of as raw text.
+  // ── File preview: .md/.markdown/.mdx attachments open rendered (Persian-aware
+  // direction, code highlighting, Mermaid); .csv/.tsv as a table and .json
+  // pretty-printed, instead of as raw text.
   // The file is rendered inside a sandboxed iframe with an opaque origin and a
   // strict CSP, so a hostile file can't reach the session, cookies or API.
   // The parent fetches the text with the user's session and posts it once.
   const MdPreview = (() => {
-    const EXT = /^(md|markdown|mdx)$/i;
+    const KINDS = { md: 'markdown', markdown: 'markdown', mdx: 'markdown', csv: 'csv', tsv: 'csv', json: 'json' };
     const MAX_BYTES = 2 * 1024 * 1024;
     const DIR = () => `${basePath}/plugins/${PLUGIN_ID}/public/md-preview/`;
-    let enabled = true;
+    const enabled = { markdown: true, data: true };
     let fontBytes = null;
 
-    const isMarkdown = fileInfo => enabled && Boolean(fileInfo) && EXT.test(fileInfo.extension || '');
+    const kindOf = fileInfo => KINDS[String(fileInfo?.extension || '').toLowerCase()] || null;
+    const canPreview = fileInfo => {
+      const kind = kindOf(fileInfo);
+      return kind === 'markdown' ? enabled.markdown : Boolean(kind) && enabled.data;
+    };
 
     function theme() {
       const rgb = getComputedStyle(document.body).getPropertyValue('--center-channel-bg-rgb').split(',').map(Number);
@@ -1405,7 +1410,7 @@
           sent = true; // one render per frame; never re-send the file
           try {
             const [md, font] = await data;
-            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, theme: theme(), font }, '*', font ? [font] : []);
+            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, theme: theme(), font }, '*', font ? [font] : []);
           } catch (err) { /* error state already set */ }
         };
         window.addEventListener('message', onMessage);
@@ -1440,12 +1445,12 @@
     function register(registry) {
       if (typeof registry.registerFilePreviewComponent !== 'function' || !window.React) return;
       injectCSS();
-      registry.registerFilePreviewComponent(isMarkdown, Component);
+      registry.registerFilePreviewComponent(canPreview, Component);
     }
 
-    function configure(on) { enabled = on; }
+    function configure({ markdown, data }) { enabled.markdown = markdown; enabled.data = data; }
 
-    return { register, configure, isMarkdown };
+    return { register, configure, canPreview };
   })();
 
   class Plugin {
@@ -1468,6 +1473,7 @@
             { title: 'تاریخ پیام‌ها', settings: [radio('timestamp', 'نمایش زمان پیام', 'تاریخ بر اساس زبان Mattermost نمایش داده می‌شود (فارسی: شمسی).', [['full', 'تاریخ و ساعت کامل'], ['time', 'فقط ساعت (پیش‌فرض Mattermost)']])] },
             { title: 'اصلاح متن فارسی', settings: [radio('fa_fix', 'اصلاح خودکار هنگام نوشتن', 'ي و ك عربی ← ی و ک فارسی، ارقام عربی ← فارسی، نیم‌فاصله در «می/نمی» و «ها». متن داخل کد تغییر نمی‌کند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
+            { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
