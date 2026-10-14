@@ -2,7 +2,7 @@
   "id": "com.github.sysman2007.mattermost-rtl",
   "name": "Mattermost RTL",
   "description": "Persian-first smart bidi, page direction, Persian fonts and collapsible sidebar for Mattermost.",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "min_server_version": "9.0.0",
   "server": {
     "executables": {
@@ -14,21 +14,21 @@
     "bundle_path": "webapp/dist/main.js"
   },
   "settings_schema": {
-    "header": "تبدیل هوشمند پیام به Markdown با LiteLLM. فقط متن پیامی که کاربر خودش به آن دسترسی دارد و روی آن «هوشمند» را زده به سرور LiteLLM فرستاده می‌شود. اگر مدل‌ها روی سرویس بیرونی هستند، پیام‌ها از سازمان خارج می‌شوند؛ پیش از فعال‌سازی به کاربران اطلاع دهید.",
+    "header": "تنظیمات بخش سرور پلاگین. هر دو قابلیت پیش‌فرض خاموش‌اند. پیش از فعال‌سازی هر کدام، به کاربران اطلاع دهید.",
     "settings": [
       {
         "key": "EnableAIMarkdown",
-        "display_name": "فعال‌سازی تبدیل هوشمند (AI):",
+        "display_name": "تبدیل هوشمند Markdown (AI):",
         "type": "bool",
         "default": false,
-        "help_text": "گزینهٔ «هوشمند (AI)» در پنجرهٔ Markdown پیام. خاموش: فقط تبدیل ساده (بدون ارسال به جایی)."
+        "help_text": "گزینهٔ «هوشمند (AI)» در پنجرهٔ Markdown پیام. فقط متن پیامی که کاربر به آن دسترسی دارد و خودش «هوشمند» را زده به LiteLLM فرستاده می‌شود."
       },
       {
         "key": "LiteLLMBaseURL",
         "display_name": "آدرس LiteLLM:",
         "type": "text",
-        "default": "https://gpt.ibarsam.com/v1",
-        "help_text": "آدرس سازگار با OpenAI، شامل /v1. باید از سرور Mattermost در دسترس باشد."
+        "default": "",
+        "help_text": "آدرس سازگار با OpenAI، شامل /v1 (مثلاً https://litellm.example.com/v1). باید از سرور Mattermost در دسترس باشد. تا آدرس وارد نشود، تبدیل هوشمند کار نمی‌کند. ⚠️ اگر مدل‌ها روی سرویس بیرونی هستند، متن پیام‌ها از سازمان خارج می‌شود."
       },
       {
         "key": "LiteLLMAPIKey",
@@ -79,6 +79,20 @@
         "type": "longtext",
         "default": "",
         "help_text": "به دستور سیستمی اضافه می‌شود؛ مثلاً اصطلاحات یا قالب سازمانی. حداکثر ۲۰۰۰ کاراکتر."
+      },
+      {
+        "key": "EnableReadReceipts",
+        "display_name": "تیک دیده‌شدن پیام‌ها (✓ / ✓✓):",
+        "type": "bool",
+        "default": false,
+        "help_text": "زیر پیام‌های هر کاربر نشان می‌دهد اعضای دیگرِ کانال (از جمله کانال‌های خصوصی و پیام‌های مستقیم) آن را دیده‌اند یا نه. هر کاربر یک بار پیام اطلاع‌رسانی می‌بیند و تا تأیید نکند، وضعیت دیده‌شدنش برای کسی نمایش داده نمی‌شود و خودش هم تیکی نمی‌بیند. زمان دقیق دیدن هرگز نمایش داده نمی‌شود. «دیده شد» یعنی کاربر پس از ارسال پیام کانال را باز کرده است (Mattermost این زمان را برای همهٔ کاربران نگه می‌دارد؛ این قابلیت آن را به‌صورت دیده‌شد/نشد نمایش می‌دهد)."
+      },
+      {
+        "key": "ReceiptsMaxMembers",
+        "display_name": "حداکثر اعضای کانال برای تیک:",
+        "type": "number",
+        "default": 200,
+        "help_text": "در کانال‌های بزرگ‌تر تیک نمایش داده نمی‌شود (۲ تا ۲۰۰۰). در کانال‌های تا ۵۰ عضو نام بینندگان (تا ۳ نفر) و در بزرگ‌ترها فقط تعداد نمایش داده می‌شود."
       }
     ]
   }
