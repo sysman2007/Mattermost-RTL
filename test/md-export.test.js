@@ -66,6 +66,7 @@ test('title and file name', () => {
   assert.equal(titleFrom('══════\n**گزارش**: فروش\nبقیه'), 'گزارش: فروش');
   assert.equal(fileName('a/b:c*?"<>|d'), 'a b c d.md');
   assert.equal(fileName('گزارش\u200cها'), 'گزارش ها.md');
+  assert.equal(fileName('پایان جمله.'), 'پایان جمله.md');
   assert.ok(fileName('x'.repeat(200)).length <= 63);
 });
 

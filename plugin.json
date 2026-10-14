@@ -2,9 +2,84 @@
   "id": "com.github.sysman2007.mattermost-rtl",
   "name": "Mattermost RTL",
   "description": "Persian-first smart bidi, page direction, Persian fonts and collapsible sidebar for Mattermost.",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "min_server_version": "9.0.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64"
+    }
+  },
   "webapp": {
     "bundle_path": "webapp/dist/main.js"
+  },
+  "settings_schema": {
+    "header": "تبدیل هوشمند پیام به Markdown با LiteLLM. فقط متن پیامی که کاربر خودش به آن دسترسی دارد و روی آن «هوشمند» را زده به سرور LiteLLM فرستاده می‌شود. اگر مدل‌ها روی سرویس بیرونی هستند، پیام‌ها از سازمان خارج می‌شوند؛ پیش از فعال‌سازی به کاربران اطلاع دهید.",
+    "settings": [
+      {
+        "key": "EnableAIMarkdown",
+        "display_name": "فعال‌سازی تبدیل هوشمند (AI):",
+        "type": "bool",
+        "default": false,
+        "help_text": "گزینهٔ «هوشمند (AI)» در پنجرهٔ Markdown پیام. خاموش: فقط تبدیل ساده (بدون ارسال به جایی)."
+      },
+      {
+        "key": "LiteLLMBaseURL",
+        "display_name": "آدرس LiteLLM:",
+        "type": "text",
+        "default": "https://gpt.ibarsam.com/v1",
+        "help_text": "آدرس سازگار با OpenAI، شامل /v1. باید از سرور Mattermost در دسترس باشد."
+      },
+      {
+        "key": "LiteLLMAPIKey",
+        "display_name": "کلید API:",
+        "type": "text",
+        "secret": true,
+        "default": "",
+        "help_text": "کلید مجازی LiteLLM مخصوص این پلاگین (alias پیشنهادی: mattermost-rtl). فقط روی سرور نگه داشته می‌شود و هرگز به مرورگر نمی‌رسد."
+      },
+      {
+        "key": "LiteLLMModel",
+        "display_name": "مدل:",
+        "type": "text",
+        "default": "qwen",
+        "help_text": "نام مدل در LiteLLM. درخواست‌ها با enable_thinking=false و سقف max_tokens فرستاده می‌شوند."
+      },
+      {
+        "key": "MaxOutputTokens",
+        "display_name": "سقف توکن خروجی:",
+        "type": "number",
+        "default": 4000,
+        "help_text": "بیشترین max_tokens هر درخواست (۲۵۶ تا ۸۰۰۰). مقدار واقعی متناسب با طول پیام کمتر است."
+      },
+      {
+        "key": "TimeoutSeconds",
+        "display_name": "زمان انتظار (ثانیه):",
+        "type": "number",
+        "default": 60,
+        "help_text": "۱۰ تا ۳۰۰. بعد از آن درخواست قطع و تبدیل ساده نمایش داده می‌شود."
+      },
+      {
+        "key": "RateLimitPerMinute",
+        "display_name": "حداکثر درخواست هر کاربر در دقیقه:",
+        "type": "number",
+        "default": 6,
+        "help_text": "۱ تا ۶۰. پلاگین در هر لحظه فقط یک درخواست به مدل می‌فرستد و نتیجهٔ هر پیام را کش می‌کند."
+      },
+      {
+        "key": "MaxInputChars",
+        "display_name": "حداکثر طول پیام (کاراکتر):",
+        "type": "number",
+        "default": 8000,
+        "help_text": "پیام‌های بلندتر فقط با تبدیل ساده نمایش داده می‌شوند."
+      },
+      {
+        "key": "ExtraInstructions",
+        "display_name": "دستورالعمل اضافه (اختیاری):",
+        "type": "longtext",
+        "default": "",
+        "help_text": "به دستور سیستمی اضافه می‌شود؛ مثلاً اصطلاحات یا قالب سازمانی. حداکثر ۲۰۰۰ کاراکتر."
+      }
+    ]
   }
 }

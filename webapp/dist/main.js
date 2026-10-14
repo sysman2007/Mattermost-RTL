@@ -1695,13 +1695,73 @@
         head.push(`# ${first.replace(/\s+$/, '')}`, '');
         body = lines.slice(2).join('\n');
       }
+      const info = metaLine(meta);
+      if (info) head.push(info, '');
+      return `${head.length ? `${head.join('\n')}\n` : ''}${body}\n`;
+    }
+
+    function metaLine(meta = {}) {
       const info = [
         meta.author && `**نویسنده:** ${meta.author}`,
         meta.channel && `**کانال:** ${meta.channel}`,
         meta.date && `**تاریخ:** ${meta.date}`
       ].filter(Boolean);
-      if (info.length) head.push(`> ${info.join(' · ')}`, '');
-      return `${head.length ? `${head.join('\n')}\n` : ''}${body}\n`;
+      return info.length ? `> ${info.join(' · ')}` : '';
+    }
+
+    // AI output + the same metadata line, placed after its H1 when it has one.
+    function withMeta(md, meta) {
+      const info = metaLine(meta);
+      if (!info) return `${md.trim()}\n`;
+      const lines = md.trim().split('\n');
+      if (/^# /.test(lines[0])) return `${lines[0]}\n\n${info}\n\n${lines.slice(1).join('\n').trim()}\n`;
+      return `${info}\n\n${md.trim()}\n`;
+    }
+
+    // ── AI («هوشمند») conversion: the plugin server calls LiteLLM; the browser
+    // only sends the post ID (no text, no key).
+    const AI_API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/ai`;
+    let aiStatus = null;
+    let aiStatusAt = 0;
+
+    function csrfToken() {
+      const m = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    function aiEnabled() {
+      if (!aiStatus || Date.now() - aiStatusAt > 5 * 60 * 1000) {
+        aiStatusAt = Date.now();
+        aiStatus = fetch(`${AI_API()}/status`, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+          .then(r => (r.ok ? r.json() : { enabled: false }))
+          .then(j => Boolean(j.enabled))
+          .catch(() => false);
+      }
+      return aiStatus;
+    }
+
+    const AI_ERRORS = {
+      rate_limited: ['تعداد درخواست‌های شما زیاد است؛ کمی بعد دوباره امتحان کنید.', 'Too many requests; try again shortly.'],
+      busy: ['مدل الان مشغول است؛ چند لحظه بعد دوباره امتحان کنید.', 'The model is busy; try again in a moment.'],
+      timeout: ['پاسخ مدل طول کشید؛ نسخهٔ ساده نمایش داده می‌شود.', 'The model took too long; showing the simple version.'],
+      too_long: ['پیام برای تبدیل هوشمند بلند است؛ نسخهٔ ساده نمایش داده می‌شود.', 'The message is too long for AI conversion; showing the simple version.'],
+      disabled: ['تبدیل هوشمند غیرفعال شده است.', 'AI conversion is turned off.']
+    };
+
+    async function aiConvert(postId) {
+      const res = await fetch(`${AI_API()}/markdown`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrfToken() },
+        body: JSON.stringify({ post_id: postId })
+      });
+      let j = {};
+      try { j = await res.json(); } catch (e) { /* non-JSON error */ }
+      if (!res.ok || !j.markdown) {
+        const [fa, en] = AI_ERRORS[j.error] || ['تبدیل هوشمند ممکن نشد؛ نسخهٔ ساده نمایش داده می‌شود.', 'AI conversion failed; showing the simple version.'];
+        throw new Error(L(fa, en));
+      }
+      return j;
     }
 
     function titleFrom(text) {
@@ -1710,7 +1770,7 @@
     }
 
     // ZWNJ becomes a space: browsers turn it into "_" in download names.
-    const fileName = title => `${title.replace(/[\\/:*?"<>|\u0000-\u001f\u200c…]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'message'}.md`;
+    const fileName = title => `${title.replace(/[\\/:*?"<>|\u0000-\u001f\u200c…]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60).replace(/[\s.]+$/, '') || 'message'}.md`;
 
     // ── UI ──
     let overlay = null;
@@ -1757,7 +1817,12 @@
       close();
       injectCSS();
       const title = titleFrom(post.message);
-      let md = toMarkdown(post.message, metaFor(post));
+      const meta = metaFor(post);
+      // One document per mode; edits in the source tab stay with their mode.
+      const docs = { simple: toMarkdown(post.message, meta), ai: null };
+      let mode = 'simple';
+      let tab = 'preview';
+      let aiBusy = false;
 
       overlay = document.createElement('div');
       overlay.className = 'mmrtl-mdx';
@@ -1766,6 +1831,10 @@
         <div class="mmrtl-mdx__box" role="dialog" aria-modal="true">
           <div class="mmrtl-mdx__head">
             <strong class="mmrtl-mdx__title" dir="auto"></strong>
+            <div class="mmrtl-mdx__tabs mmrtl-mdx__modes" role="tablist" hidden>
+              <button type="button" data-mode="simple" class="on">${L('ساده', 'Simple')}</button>
+              <button type="button" data-mode="ai">${L('هوشمند (AI)', 'Smart (AI)')}</button>
+            </div>
             <div class="mmrtl-mdx__tabs" role="tablist">
               <button type="button" data-tab="preview" class="on">${L('پیش‌نمایش', 'Preview')}</button>
               <button type="button" data-tab="source">${L('متن Markdown', 'Markdown source')}</button>
@@ -1774,31 +1843,80 @@
             <button type="button" data-act="download" class="primary">${L('دانلود .md', 'Download .md')}</button>
             <button type="button" data-act="close" aria-label="${L('بستن', 'Close')}">✕</button>
           </div>
+          <div class="mmrtl-mdx__note" hidden></div>
           <div class="mmrtl-mdx__body"></div>
         </div>`;
       overlay.querySelector('.mmrtl-mdx__title').textContent = fileName(title);
       const body = overlay.querySelector('.mmrtl-mdx__body');
+      const note = overlay.querySelector('.mmrtl-mdx__note');
       const source = document.createElement('textarea');
       source.className = 'mmrtl-mdx__source';
       source.dir = 'auto';
       source.spellcheck = false;
-      source.value = md;
-      source.addEventListener('input', () => { md = source.value; });
+      source.addEventListener('input', () => { docs[mode] = source.value; });
 
-      const show = tab => {
-        overlay.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
-        body.textContent = '';
-        body.appendChild(tab === 'source' ? source : MdPreview.createFrame(md));
+      const setNote = (text, kind) => {
+        note.hidden = !text;
+        note.textContent = text || '';
+        note.dataset.kind = kind || '';
       };
+      const current = () => docs[mode] ?? docs.simple;
+      const render = () => {
+        overlay.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+        overlay.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+        body.textContent = '';
+        if (aiBusy && mode === 'ai') {
+          const wait = document.createElement('div');
+          wait.className = 'mmrtl-mdx__wait';
+          wait.textContent = L('در حال تبدیل با AI… (ممکن است چند ثانیه طول بکشد)', 'Converting with AI… (this can take a few seconds)');
+          body.appendChild(wait);
+          return;
+        }
+        source.value = current();
+        body.appendChild(tab === 'source' ? source : MdPreview.createFrame(current()));
+      };
+
+      async function useAi() {
+        mode = 'ai';
+        if (docs.ai) {
+          setNote(L('تولیدشده با AI؛ پیش از استفاده بررسی کنید.', 'Generated by AI; review before use.'), 'ai');
+          return render();
+        }
+        if (aiBusy) return render();
+        aiBusy = true;
+        setNote('', '');
+        render();
+        try {
+          const j = await aiConvert(post.id);
+          docs.ai = withMeta(j.markdown, meta);
+          setNote(j.truncated
+            ? L('تولیدشده با AI؛ خروجی به سقف طول رسید و ممکن است ناقص باشد.', 'Generated by AI; output hit the length limit and may be incomplete.')
+            : L('تولیدشده با AI؛ پیش از استفاده بررسی کنید.', 'Generated by AI; review before use.'), j.truncated ? 'warn' : 'ai');
+        } catch (err) {
+          mode = 'simple';
+          setNote(err.message, 'warn');
+        } finally {
+          aiBusy = false;
+          if (overlay) render();
+        }
+      }
+
+      aiEnabled().then(on => {
+        const modes = overlay?.querySelector('.mmrtl-mdx__modes');
+        if (modes) modes.hidden = !on;
+      });
+
       overlay.addEventListener('click', e => {
         if (e.target === overlay) return close();
         const btn = e.target.closest('button');
         if (!btn) return;
-        if (btn.dataset.tab) show(btn.dataset.tab);
+        if (btn.dataset.tab) { tab = btn.dataset.tab; render(); }
+        else if (btn.dataset.mode === 'ai') useAi();
+        else if (btn.dataset.mode === 'simple') { mode = 'simple'; setNote('', ''); render(); }
         else if (btn.dataset.act === 'close') close();
-        else if (btn.dataset.act === 'download') download(md, fileName(title));
+        else if (btn.dataset.act === 'download') download(current(), fileName(title));
         else if (btn.dataset.act === 'copy') {
-          navigator.clipboard?.writeText(md).then(() => {
+          navigator.clipboard?.writeText(current()).then(() => {
             const label = btn.textContent;
             btn.textContent = '✓';
             setTimeout(() => { btn.textContent = label; }, 1200);
@@ -1807,7 +1925,7 @@
       });
       document.addEventListener('keydown', onKey, true);
       document.body.appendChild(overlay);
-      show('preview');
+      render();
     }
 
     function injectCSS() {
@@ -1825,6 +1943,10 @@
         .mmrtl-mdx__tabs { display: flex; gap: 2px; }
         .mmrtl-mdx__tabs button.on { background: rgba(var(--button-bg-rgb), .12); color: var(--button-bg); border-color: rgba(var(--button-bg-rgb), .4); }
         .mmrtl-mdx__body { flex: 1; min-height: 0; display: flex; }
+        .mmrtl-mdx__modes[hidden] { display: none; }
+        .mmrtl-mdx__note { padding: 6px 14px; font-size: 12.5px; background: rgba(var(--button-bg-rgb), .08); color: var(--center-channel-color); border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .08); }
+        .mmrtl-mdx__note[data-kind="warn"] { background: rgba(var(--away-indicator-rgb, 255, 188, 66), .18); }
+        .mmrtl-mdx__wait { flex: 1; display: flex; align-items: center; justify-content: center; color: rgba(var(--center-channel-color-rgb), .64); }
         .mmrtl-mdx__body iframe { flex: 1; width: 100%; height: 100%; border: 0; }
         .mmrtl-mdx__source { flex: 1; margin: 0; padding: 16px; border: 0; resize: none; background: transparent; color: inherit; font: 13.5px/1.7 Consolas, "Cascadia Code", monospace; unicode-bidi: plaintext; }`;
       (document.head || document.documentElement).appendChild(st);
