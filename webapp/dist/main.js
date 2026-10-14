@@ -1998,9 +1998,11 @@
       st.textContent = `
         html.mmrtl-rr-on .post-message[data-mmrtl-rr]::after {
           content: attr(data-mmrtl-rr); display: block; margin-top: 2px; text-align: end;
-          font-size: 11px; line-height: 1.4; color: rgba(var(--center-channel-color-rgb), .48); unicode-bidi: plaintext;
+          font-size: 12px; line-height: 1.4; unicode-bidi: plaintext;
+          /* sent: pale blue; seen: full theme blue, bolder (theme link colour, so it works in light and dark themes) */
+          color: rgba(var(--link-color-rgb, 35, 137, 215), .55);
         }
-        html.mmrtl-rr-on .post-message[data-mmrtl-rr-seen="1"]::after { color: var(--link-color); }
+        html.mmrtl-rr-on .post-message[data-mmrtl-rr-seen="1"]::after { color: var(--link-color, #2389d7); font-weight: 600; }
         .mmrtl-rr-notice { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); }
         .mmrtl-rr-notice__box { width: min(520px, 92vw); padding: 22px 24px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); box-shadow: 0 20px 60px rgba(0,0,0,.35); line-height: 1.9; }
         .mmrtl-rr-notice__box h3 { margin: 0 0 8px; font-size: 17px; }
