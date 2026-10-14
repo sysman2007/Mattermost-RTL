@@ -587,7 +587,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -626,11 +626,11 @@
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
-    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on' });
+    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on', code: s.code_preview === 'on' });
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     ReadReceipts.configure(s.read_receipts === 'on');
-    PasteAsFile.configure(s.paste_as_file === 'on');
+    PasteAsFile.configure(s.paste_as_file === 'on', s.code_paste === 'on');
     applyCodeBlocksLTR();
   }
 
@@ -1352,15 +1352,33 @@
   // The parent fetches the text with the user's session and posts it once.
   const MdPreview = (() => {
     const KINDS = { md: 'markdown', markdown: 'markdown', mdx: 'markdown', csv: 'csv', tsv: 'csv', json: 'json' };
+    // Source files → Prism language (only languages bundled in vendor/prism.js).
+    const CODE = {
+      js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx', ts: 'typescript', mts: 'typescript', tsx: 'tsx',
+      py: 'python', cs: 'csharp', java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+      go: 'go', rs: 'rust', php: 'php', rb: 'ruby', kt: 'kotlin', kts: 'kotlin', swift: 'swift', sql: 'sql',
+      yml: 'yaml', yaml: 'yaml', toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', env: 'ini', properties: 'ini',
+      sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell', psm1: 'powershell', bat: 'batch', cmd: 'batch',
+      html: 'markup', htm: 'markup', xml: 'markup', svg: 'markup', vue: 'markup', csproj: 'markup', config: 'markup',
+      css: 'css', scss: 'css', less: 'css', graphql: 'graphql', gql: 'graphql', diff: 'diff', patch: 'diff',
+      dockerfile: 'docker', regex: 'regex'
+    };
     const MAX_BYTES = 2 * 1024 * 1024;
     const DIR = () => `${basePath}/plugins/${PLUGIN_ID}/public/md-preview/`;
-    const enabled = { markdown: true, data: true };
+    const enabled = { markdown: true, data: true, code: true };
     let fontBytes = null;
 
-    const kindOf = fileInfo => KINDS[String(fileInfo?.extension || '').toLowerCase()] || null;
+    const extOf = fileInfo => {
+      const ext = String(fileInfo?.extension || '').toLowerCase();
+      // «Dockerfile» has no extension.
+      return ext || (/^dockerfile$/i.test(fileInfo?.name || '') ? 'dockerfile' : '');
+    };
+    const kindOf = fileInfo => KINDS[extOf(fileInfo)] || (CODE[extOf(fileInfo)] ? 'code' : null);
     const canPreview = fileInfo => {
       const kind = kindOf(fileInfo);
-      return kind === 'markdown' ? enabled.markdown : Boolean(kind) && enabled.data;
+      if (kind === 'markdown') return enabled.markdown;
+      if (kind === 'code') return enabled.code;
+      return Boolean(kind) && enabled.data;
     };
 
     function theme() {
@@ -1422,7 +1440,7 @@
           sent = true; // one render per frame; never re-send the file
           try {
             const [md, font] = await data;
-            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, theme: theme(), font }, '*', font ? [font] : []);
+            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', font ? [font] : []);
           } catch (err) { /* error state already set */ }
         };
         window.addEventListener('message', onMessage);
@@ -1460,7 +1478,7 @@
       registry.registerFilePreviewComponent(canPreview, Component);
     }
 
-    function configure({ markdown, data }) { enabled.markdown = markdown; enabled.data = data; }
+    function configure({ markdown, data, code }) { enabled.markdown = markdown; enabled.data = data; enabled.code = code; }
 
     // A preview frame for Markdown text that's already in memory (no file fetch).
     function createFrame(md) {
@@ -2220,16 +2238,148 @@
       barTimer = setTimeout(hideBar, BAR_TTL);
     }
 
+    // ── Code paste: pick the language, wrap in a ```lang fence (Mattermost
+    // then highlights it), or set the language of the fence being pasted into.
+    const LANGS = [
+      ['javascript', 'JavaScript', 'js'], ['typescript', 'TypeScript', 'ts'], ['jsx', 'JSX', 'jsx'], ['tsx', 'TSX', 'tsx'],
+      ['json', 'JSON', 'json'], ['python', 'Python', 'py'], ['csharp', 'C#', 'cs'], ['java', 'Java', 'java'],
+      ['c', 'C', 'c'], ['cpp', 'C++', 'cpp'], ['go', 'Go', 'go'], ['rust', 'Rust', 'rs'], ['php', 'PHP', 'php'],
+      ['ruby', 'Ruby', 'rb'], ['kotlin', 'Kotlin', 'kt'], ['swift', 'Swift', 'swift'], ['sql', 'SQL', 'sql'],
+      ['yaml', 'YAML', 'yaml'], ['toml', 'TOML', 'toml'], ['ini', 'INI / env', 'ini'], ['bash', 'Bash / Shell', 'sh'],
+      ['powershell', 'PowerShell', 'ps1'], ['batch', 'Batch', 'bat'], ['html', 'HTML', 'html'], ['xml', 'XML', 'xml'],
+      ['css', 'CSS', 'css'], ['graphql', 'GraphQL', 'graphql'], ['dockerfile', 'Dockerfile', 'dockerfile'],
+      ['diff', 'Diff', 'diff'], ['nginx', 'Nginx', 'conf'], ['markdown', 'Markdown', 'md'], ['text', L('متن ساده', 'Plain text'), 'txt']
+    ];
+
+    // Pure: does the text look like code, and which language? Conservative —
+    // prose (including Persian) must not be offered a code fence.
+    function detectCode(text) {
+      const t = String(text || '').replace(/\r\n?/g, '\n').trim();
+      const lines = t.split('\n');
+      if (lines.length < 2 && t.length < 60) return { isCode: false, lang: null };
+      const letters = (t.match(/[A-Za-z؀-ۿ]/g) || []).length;
+      const latin = (t.match(/[A-Za-z]/g) || []).length;
+      if (!letters || latin / letters < 0.5) return { isCode: false, lang: null };
+      const rules = [
+        ['php', /^<\?php/],
+        ['json', /^[{[][\s\S]*[}\]]$/, s => { try { JSON.parse(s); return true; } catch (e) { return false; } }],
+        ['xml', /^<\?xml/],
+        ['html', /^<(!doctype|html|div|span|template|[a-z]+[\s>])/i],
+        ['dockerfile', /^\s*FROM\s+\S+/im, s => /^\s*(RUN|COPY|CMD|ENTRYPOINT|WORKDIR)\b/m.test(s)],
+        ['diff', /^(diff --git|@@ .* @@|--- a\/)/m],
+        ['sql', /^\s*(SELECT|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+(TABLE|INDEX|VIEW)|ALTER\s+TABLE|WITH\s+\w+\s+AS)\b/im],
+        ['java', /\bpublic\s+static\s+void\s+main\b|\bSystem\.out\.|\bimport\s+java\./],
+        ['csharp', /\busing\s+System\b|\bnamespace\s+[\w.]+|\bpublic\s+(async\s+)?(Task|void|class|record|interface)\b|\bvar\s+\w+\s*=\s*new\b|\bawait\s+\w+Async\(/],
+        ['go', /^package\s+\w+|\bfunc\s+(\(\w+\s+\*?\w+\)\s*)?\w+\(|:=/m],
+        ['rust', /\bfn\s+\w+\(|\blet\s+mut\b|\bimpl\b|::new\(/],
+        ['cpp', /#include\s*[<"]|\bstd::/],
+        ['python', /^\s*(def|class)\s+\w+.*:\s*$|^\s*(import|from)\s+[\w.]+|\bprint\(|\bself\./m],
+        ['powershell', /\b(Get|Set|New|Remove|Invoke|Write)-\w+|\$\w+\s*=\s*.+\|\s*\w+-\w+/],
+        ['bash', /^#!.*\b(ba)?sh\b|^\s*(sudo|apt(-get)?|docker|kubectl|git|cd|ls|curl|export|echo|systemctl)\s/m],
+        ['typescript', /\b(interface|type)\s+\w+\s*[={]|:\s*(string|number|boolean|void)\b|\bimport\s+.*\s+from\s+['"]/],
+        ['javascript', /\b(const|let|var|function)\s+\w+|=>|console\.\w+\(|\brequire\(/],
+        ['css', /^\s*[.#]?[\w-]+(\s*[,>+~]\s*[.#]?[\w-]+)*\s*\{[^}]*:[^}]*;/m],
+        ['yaml', /^\s*[\w-]+:\s*\S/m, s => s.split('\n').filter(l => /^\s*[\w-]+:\s/.test(l) || /^\s*-\s/.test(l)).length >= 2 && !/[;{}]/.test(s)],
+        ['ini', /^\s*\[[\w.-]+\]\s*$/m]
+      ];
+      for (const [lang, re, check] of rules) {
+        if (re.test(t) && (!check || check(t))) return { isCode: true, lang };
+      }
+      // Unknown language but clearly code-shaped: many lines ending in ; { } or indented.
+      const codey = lines.filter(l => /[;{}]\s*$/.test(l) || /^\s{2,}\S/.test(l)).length;
+      return lines.length >= 3 && codey / lines.length >= 0.5 ? { isCode: true, lang: 'text' } : { isCode: false, lang: null };
+    }
+
+    // Is position `pos` inside an open ``` fence? Returns the opening line's start, or -1.
+    function openFenceBefore(value, pos) {
+      const before = value.slice(0, pos);
+      const re = /^```.*$/gm;
+      let m, open = -1;
+      while ((m = re.exec(before))) open = open < 0 ? m.index : -1;
+      return open;
+    }
+
+    function setFenceLang(ta, fenceStart, lang) {
+      const end = ta.value.indexOf('\n', fenceStart);
+      const lineEnd = end < 0 ? ta.value.length : end;
+      setValue(ta, `${ta.value.slice(0, fenceStart)}\`\`\`${lang === 'text' ? '' : lang}${ta.value.slice(lineEnd)}`);
+    }
+
+    function wrapInFence(ta, text, lang) {
+      const at = ta.value.indexOf(text);
+      if (at < 0) return;
+      const pre = at > 0 && ta.value[at - 1] !== '\n' ? '\n' : '';
+      const after = ta.value.slice(at + text.length);
+      const post = after && !after.startsWith('\n') ? '\n' : '';
+      const body = text.replace(/\n+$/, '');
+      setValue(ta, `${ta.value.slice(0, at)}${pre}\`\`\`${lang === 'text' ? '' : lang}\n${body}\n\`\`\`${post}${after}`);
+    }
+
+    function attachCode(ta, text, lang) {
+      const at = ta.value.indexOf(text);
+      if (at >= 0) setValue(ta, ta.value.slice(0, at) + ta.value.slice(at + text.length));
+      const ext = (LANGS.find(l => l[0] === lang) || LANGS[LANGS.length - 1])[2];
+      const file = new File([text.endsWith('\n') ? text : `${text}\n`], `snippet.${ext}`, { type: 'text/plain' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      ta.focus();
+      injecting = true;
+      try { ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); } finally { injecting = false; }
+    }
+
+    // mode 'wrap': pasted code outside a fence; 'fence': pasted into a ``` block without a language.
+    function showCodeBar(ta, text, guess, mode, fenceStart) {
+      hideBar();
+      injectCSS();
+      bar = document.createElement('div');
+      bar.className = 'mmrtl-paf';
+      bar.dir = isFa() ? 'rtl' : 'ltr';
+      const options = LANGS.map(([v, label]) => `<option value="${v}"${v === guess ? ' selected' : ''}>${label}</option>`).join('');
+      bar.innerHTML = `<span>💻 ${L('کد چسباندید. زبان:', 'Code pasted. Language:')}</span>
+        <select aria-label="${L('زبان کد', 'Code language')}">${options}</select>
+        <button type="button" data-act="fence">${mode === 'fence' ? L('تنظیم زبان بلوک کد', 'Set block language') : L('قرار دادن در بلوک کد', 'Put in a code block')}</button>
+        ${isLong(text) ? `<button type="button" data-act="file">${L('ارسال به‌صورت فایل', 'Send as a file')}</button>` : ''}
+        <button type="button" data-act="keep" class="plain">${L('بدون تغییر', 'Leave as is')}</button>`;
+      const select = bar.querySelector('select');
+      bar.addEventListener('mousedown', e => { if (e.target.tagName !== 'SELECT' && e.target.tagName !== 'OPTION') e.preventDefault(); });
+      bar.addEventListener('click', e => {
+        const act = e.target.closest('button')?.dataset.act;
+        if (!act) return;
+        if (ta.isConnected && act === 'fence') {
+          if (mode === 'fence') setFenceLang(ta, fenceStart, select.value);
+          else wrapInFence(ta, text, select.value);
+        } else if (ta.isConnected && act === 'file') attachCode(ta, text, select.value);
+        hideBar();
+        ta.focus();
+      });
+      document.body.appendChild(bar);
+      const r = ta.getBoundingClientRect();
+      bar.style.left = `${Math.max(8, r.left)}px`;
+      bar.style.width = `${Math.min(r.width, innerWidth - 16)}px`;
+      bar.style.top = `${Math.max(8, r.top - bar.offsetHeight - 6)}px`;
+      barTimer = setTimeout(hideBar, BAR_TTL);
+    }
+
     function onPaste(e) {
-      if (!on || injecting || e.defaultPrevented) return;
+      if ((!on && !codeOn) || injecting || e.defaultPrevented) return;
       const ta = e.target;
       if (!(ta instanceof HTMLTextAreaElement) || !ta.matches(BOXES)) return;
       const cd = e.clipboardData;
       if (!cd || (cd.files && cd.files.length)) return; // files/images: Mattermost handles them
-      const text = cd.getData('text/plain');
-      if (!isLong(text)) return;
-      // Let the normal paste happen; only offer the alternative.
-      setTimeout(() => showBar(ta, text.replace(/\r\n?/g, '\n')), 0);
+      const text = cd.getData('text/plain').replace(/\r\n?/g, '\n');
+      if (!text.trim()) return;
+      // Decide from the box as it is before the paste lands.
+      const fenceStart = openFenceBefore(ta.value, ta.selectionStart);
+      const fenceLine = fenceStart >= 0 ? ta.value.slice(fenceStart, (ta.value.indexOf('\n', fenceStart) + 1 || ta.value.length + 1) - 1) : '';
+      const guess = detectCode(text);
+      // Let the normal paste happen; only offer the alternatives.
+      if (codeOn && fenceStart >= 0 && /^```\s*$/.test(fenceLine)) {
+        setTimeout(() => showCodeBar(ta, text, guess.lang || 'text', 'fence', fenceStart), 0);
+      } else if (codeOn && fenceStart < 0 && guess.isCode) {
+        setTimeout(() => showCodeBar(ta, text, guess.lang, 'wrap', -1), 0);
+      } else if (on && fenceStart < 0 && isLong(text)) {
+        setTimeout(() => showBar(ta, text), 0);
+      }
     }
 
     function onKey(e) {
@@ -2246,22 +2396,25 @@
           background: var(--center-channel-bg); color: var(--center-channel-color); border: 1px solid rgba(var(--center-channel-color-rgb), .16); box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 13px; }
         .mmrtl-paf span { flex: 1 1 auto; }
         .mmrtl-paf button { border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; background: var(--button-bg); color: var(--button-color); }
+        .mmrtl-paf select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid rgba(var(--center-channel-color-rgb), .24); background: var(--center-channel-bg); color: inherit; direction: ltr; }
         .mmrtl-paf button.plain { background: transparent; color: inherit; border: 1px solid rgba(var(--center-channel-color-rgb), .2); }`;
       (document.head || document.documentElement).appendChild(st);
     }
 
     let listening = false;
-    function configure(enabled) {
+    let codeOn = true;
+    function configure(enabled, codeEnabled = true) {
       on = enabled;
-      if (!on) hideBar();
-      if (on && !listening) {
+      codeOn = codeEnabled;
+      if (!on && !codeOn) hideBar();
+      if ((on || codeOn) && !listening) {
         listening = true;
         document.addEventListener('paste', onPaste, true);
         document.addEventListener('keydown', onKey, true);
       }
     }
 
-    return { configure, isLong };
+    return { configure, isLong, detectCode, openFenceBefore };
   })();
 
   class Plugin {
@@ -2285,8 +2438,10 @@
             { title: 'اصلاح متن فارسی', settings: [radio('fa_fix', 'اصلاح خودکار هنگام نوشتن', 'ي و ك عربی ← ی و ک فارسی، ارقام عربی ← فارسی، نیم‌فاصله در «می/نمی» و «ها». متن داخل کد تغییر نمی‌کند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
+            { title: 'پیش‌نمایش فایل‌های کد', settings: [radio('code_preview', 'پیش‌نمایش فایل‌های کد با Prism', 'فایل‌های کد (js، ts، py، cs، java، go، sql، yaml، sh، ps1، html، css، Dockerfile و…) با رنگ‌آمیزی، شماره خط و دکمهٔ Copy نمایش داده می‌شوند. خاموش: پیش‌نمایش خود Mattermost.', [['on', 'فعال (همهٔ فایل‌های کد)'], ['off', 'غیرفعال']])] },
             { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'چسباندن متن بلند به‌صورت فایل', settings: [radio('paste_as_file', 'پیشنهاد ارسال متن بلند به‌صورت فایل .md', 'بعد از چسباندن متن بلند (۱۰ خط یا ۱۰۰۰ کاراکتر به بالا) در کادر پیام، نواری پیشنهاد می‌دهد آن را به‌صورت پیوست .md (خام یا مرتب‌شده) بفرستید. متن‌های کوتاه و فایل‌ها دست نمی‌خورند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
+            { title: 'زبان کد هنگام چسباندن', settings: [radio('code_paste', 'انتخاب زبان برای کدِ چسبانده‌شده', 'وقتی کد می‌چسبانید (یا داخل یک بلوک ``` بدون زبان)، نواری زبان را حدس می‌زند و اجازه می‌دهد آن را در بلوک کد با زبان درست قرار دهید (Mattermost آن را رنگ‌آمیزی می‌کند) یا کد بلند را به‌صورت فایل بفرستید.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'تیک دیده‌شدن پیام', settings: [radio('read_receipts', 'نمایش ✓ و ✓✓ زیر پیام‌های شما', 'فقط وقتی مدیر سیستم این قابلیت را فعال کرده باشد کار می‌کند. خاموش کردن، فقط نمایش را در صفحهٔ شما پنهان می‌کند.', [['on', 'نمایش'], ['off', 'پنهان']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
@@ -2344,5 +2499,5 @@
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
   // Node unit tests only; in the browser `module` is undefined.
-  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, detectCode: PasteAsFile.detectCode, openFenceBefore: PasteAsFile.openFenceBefore, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
 })();
