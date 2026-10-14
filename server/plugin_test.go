@@ -241,9 +241,12 @@ func TestNormalizedClampsLimits(t *testing.T) {
 	assert.Equal(t, defaultRateLimit, c.RateLimitPerMinute)
 	assert.Equal(t, defaultMaxInputChars, c.MaxInputChars)
 	assert.Equal(t, "https://x/v1", c.LiteLLMBaseURL)
+	assert.Equal(t, defaultReceiptsMax, c.ReceiptsMaxMembers)
+	assert.Error(t, configuration{EnableAIMarkdown: true}.validate(), "enabled without a URL")
 	assert.Equal(t, "qwen", c.LiteLLMModel)
 	assert.Error(t, configuration{EnableAIMarkdown: true, LiteLLMBaseURL: "file:///etc/passwd"}.validate())
-	assert.NoError(t, configuration{EnableAIMarkdown: true, LiteLLMBaseURL: defaultBaseURL}.validate())
+	assert.NoError(t, configuration{EnableAIMarkdown: true, LiteLLMBaseURL: "https://litellm.example/v1"}.validate())
+	assert.NoError(t, configuration{}.validate(), "disabled needs no URL")
 }
 
 func TestCleanOutputAndBudget(t *testing.T) {
@@ -271,3 +274,5 @@ func filterOut(calls []*mock.Call, method string) []*mock.Call {
 	}
 	return out
 }
+
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

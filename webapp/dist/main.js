@@ -587,7 +587,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -629,6 +629,7 @@
     MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on' });
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
+    ReadReceipts.configure(s.read_receipts === 'on');
     applyCodeBlocksLTR();
   }
 
@@ -1955,6 +1956,197 @@
     return { open, close, toMarkdown, titleFrom, fileName };
   })();
 
+  // ── Read receipts («تیک دیده‌شدن»): ✓ sent, ✓✓ seen, under the user's own
+  // posts in the current channel. Server side decides who may see what: the
+  // admin turns it on, every user gets a one-time notice first, and only
+  // «seen / not seen» per post comes back — never view times.
+  const ReadReceipts = (() => {
+    const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/receipts`;
+    const FAST = 15000, SLOW = 60000;
+    let display = true;
+    let status = null;          // { enabled, acknowledged }
+    let statusAt = 0;
+    let timer = null;
+    let channelId = null;
+    let skipChannel = null;     // channel reported too large
+    let results = {};           // postId → { text, seen }
+    let noticeShown = false;
+    let started = false;
+
+    const fa = n => (isFa() ? Number(n).toLocaleString('fa-IR') : String(n));
+    const headers = json => ({ 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrfToken(), ...(json ? { 'Content-Type': 'application/json' } : {}) });
+
+    function csrfToken() {
+      const m = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    async function loadStatus(force) {
+      if (!force && status && Date.now() - statusAt < 5 * 60 * 1000) return status;
+      statusAt = Date.now();
+      try {
+        const r = await fetch(`${API()}/status`, { credentials: 'include', headers: headers(false) });
+        status = r.ok ? await r.json() : { enabled: false };
+      } catch (e) { status = { enabled: false }; }
+      return status;
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-rr-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-rr-style';
+      st.textContent = `
+        html.mmrtl-rr-on .post-message[data-mmrtl-rr]::after {
+          content: attr(data-mmrtl-rr); display: block; margin-top: 2px; text-align: end;
+          font-size: 11px; line-height: 1.4; color: rgba(var(--center-channel-color-rgb), .48); unicode-bidi: plaintext;
+        }
+        html.mmrtl-rr-on .post-message[data-mmrtl-rr-seen="1"]::after { color: var(--link-color); }
+        .mmrtl-rr-notice { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); }
+        .mmrtl-rr-notice__box { width: min(520px, 92vw); padding: 22px 24px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); box-shadow: 0 20px 60px rgba(0,0,0,.35); line-height: 1.9; }
+        .mmrtl-rr-notice__box h3 { margin: 0 0 8px; font-size: 17px; }
+        .mmrtl-rr-notice__box ul { margin: 8px 0; padding-inline-start: 20px; }
+        .mmrtl-rr-notice__box button { margin-top: 12px; padding: 6px 18px; border: 0; border-radius: 6px; background: var(--button-bg); color: var(--button-color); cursor: pointer; font: inherit; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    // One-time notice: until acknowledged, the user's own views are never
+    // reported and they see no receipts.
+    function showNotice() {
+      if (noticeShown || document.querySelector('.mmrtl-rr-notice')) return;
+      noticeShown = true;
+      injectCSS();
+      const el = document.createElement('div');
+      el.className = 'mmrtl-rr-notice';
+      el.dir = isFa() ? 'rtl' : 'ltr';
+      el.innerHTML = `<div class="mmrtl-rr-notice__box" role="dialog" aria-modal="true">
+        <h3>${L('اطلاع‌رسانی: نمایش «دیده شد» برای پیام‌ها', 'Notice: “Seen” indicators on messages')}</h3>
+        <p>${L('مدیر سیستم نمایش وضعیت دیده‌شدن پیام‌ها را فعال کرده است:', 'Your system administrator has turned on message read indicators:')}</p>
+        <ul>
+          <li>${L('زیر پیام‌های شما «✓» (ارسال شد) یا «✓✓» (دیده شد) نمایش داده می‌شود.', 'Your messages show “✓” (sent) or “✓✓” (seen).')}</li>
+          <li>${L('اعضای دیگرِ هر کانال، از جمله کانال‌های خصوصی و پیام‌های مستقیم، می‌بینند که شما پیامشان را دیده‌اید یا نه.', 'Other members of a channel — including private channels and direct messages — can see whether you have seen their messages.')}</li>
+          <li>${L('«دیده شد» یعنی پس از ارسال پیام، کانال را باز کرده‌اید. زمانِ دقیقِ دیدن به هیچ‌کس نشان داده نمی‌شود.', '“Seen” means you opened the channel after the message was sent. The exact time is never shown to anyone.')}</li>
+          <li>${L('تا وقتی این پیام را تأیید نکنید، وضعیت دیده‌شدنِ شما برای دیگران نمایش داده نمی‌شود.', 'Until you acknowledge this notice, your read status is not shown to others.')}</li>
+        </ul>
+        <button type="button">${L('متوجه شدم', 'I understand')}</button>
+      </div>`;
+      el.querySelector('button').addEventListener('click', async () => {
+        try {
+          const r = await fetch(`${API()}/ack`, { method: 'POST', credentials: 'include', headers: headers(false) });
+          if (r.ok) { status = { ...status, acknowledged: true }; el.remove(); schedule(0); }
+        } catch (e) { /* stays open; retry */ }
+      });
+      document.body.appendChild(el);
+    }
+
+    function currentChannel() { return store?.getState()?.entities?.channels?.currentChannelId || null; }
+
+    function ownPostIds(chId) {
+      const e = store.getState().entities;
+      const me = e.users.currentUserId;
+      const ids = [];
+      for (const el of document.querySelectorAll('[id^="post_"]')) {
+        const id = el.id.slice(5);
+        const p = e.posts.posts[id];
+        if (p && p.user_id === me && p.channel_id === chId && !p.type && !p.failed && /^[a-z0-9]{26}$/.test(id)) ids.push(id);
+      }
+      return ids.slice(-50);
+    }
+
+    function label(rec, members, names) {
+      if (!rec || rec.seen === 0) return { text: '✓', seen: false };
+      if (members <= 1) return { text: L('✓✓ دیده شد', '✓✓ Seen'), seen: true };
+      if (names && names.length && names.length <= 3) return { text: `✓✓ ${names.join(L('، ', ', '))}`, seen: true };
+      return { text: `✓✓ ${L(`${fa(rec.seen)} از ${fa(members)}`, `${rec.seen} of ${members}`)}`, seen: true };
+    }
+
+    function apply() {
+      if (!display) return;
+      for (const [id, r] of Object.entries(results)) {
+        const msg = document.querySelector(`#post_${id} .post-message`);
+        if (!msg || msg.getAttribute('data-mmrtl-rr') === r.text) continue;
+        msg.setAttribute('data-mmrtl-rr', r.text);
+        msg.setAttribute('data-mmrtl-rr-seen', r.seen ? '1' : '0');
+      }
+    }
+
+    function clearMarks() {
+      document.querySelectorAll('[data-mmrtl-rr]').forEach(el => { el.removeAttribute('data-mmrtl-rr'); el.removeAttribute('data-mmrtl-rr-seen'); });
+    }
+
+    async function refresh() {
+      timer = null;
+      if (!display || document.hidden) return;
+      const st = await loadStatus(false);
+      if (!st.enabled) { clearMarks(); results = {}; return schedule(SLOW); }
+      if (!st.acknowledged) { showNotice(); return; }
+      const chId = currentChannel();
+      if (!chId || chId === skipChannel) return schedule(SLOW);
+      const ids = ownPostIds(chId);
+      if (!ids.length) return schedule(SLOW);
+      let j;
+      try {
+        const r = await fetch(API(), { method: 'POST', credentials: 'include', headers: headers(true), body: JSON.stringify({ channel_id: chId, post_ids: ids }) });
+        if (r.status === 403) { status = { ...status, acknowledged: false }; showNotice(); return; }
+        if (!r.ok) return schedule(SLOW);
+        j = await r.json();
+      } catch (e) { return schedule(SLOW); }
+      if (j.too_large) { skipChannel = chId; return; }
+      const profiles = store.getState().entities.users.profiles;
+      const next = {};
+      let pending = false;
+      for (const id of ids) {
+        const rec = j.posts?.[id];
+        const names = rec?.by?.map(u => profiles[u]?.first_name || profiles[u]?.username).filter(Boolean);
+        next[id] = label(rec, j.members, names);
+        if (!rec || rec.seen < j.members) pending = true;
+      }
+      results = next;
+      apply();
+      schedule(pending ? FAST : SLOW);
+    }
+
+    function schedule(ms) {
+      clearTimeout(timer);
+      timer = setTimeout(refresh, ms);
+    }
+
+    function onStoreChange() {
+      const chId = currentChannel();
+      if (chId !== channelId) {
+        channelId = chId;
+        skipChannel = null;
+        results = {};
+        if (started) schedule(300);
+      }
+    }
+
+    // Someone else posting in this channel means they have seen it.
+    function onPosted(msg) {
+      const chId = msg?.broadcast?.channel_id || msg?.data?.channel_id;
+      if (started && chId && chId === currentChannel()) schedule(1000);
+    }
+
+    function init(registry) {
+      if (typeof registry.registerWebSocketEventHandler === 'function') registry.registerWebSocketEventHandler('posted', onPosted);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && started) schedule(500); });
+    }
+
+    async function configure(on) {
+      display = on;
+      document.documentElement.classList.toggle('mmrtl-rr-on', on);
+      if (!on) { clearTimeout(timer); clearMarks(); return; }
+      injectCSS();
+      if (!started) {
+        started = true;
+        const st = await loadStatus(true);
+        if (st.enabled && !st.acknowledged) showNotice();
+        schedule(500);
+      }
+    }
+
+    return { init, configure, apply, onStoreChange };
+  })();
+
   class Plugin {
     initialize(registry, reduxStore) {
       store = reduxStore;
@@ -1977,6 +2169,7 @@
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
             { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
+            { title: 'تیک دیده‌شدن پیام', settings: [radio('read_receipts', 'نمایش ✓ و ✓✓ زیر پیام‌های شما', 'فقط وقتی مدیر سیستم این قابلیت را فعال کرده باشد کار می‌کند. خاموش کردن، فقط نمایش را در صفحهٔ شما پنهان می‌کند.', [['on', 'نمایش'], ['off', 'پنهان']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
@@ -1985,6 +2178,7 @@
       const React = window.React;
       const SendToLabel = () => L('ارسال به…', 'Send to…');
       MdPreview.register(registry);
+      ReadReceipts.init(registry);
       const MdLabel = () => L('نمایش به‌صورت Markdown', 'View as Markdown');
       registry.registerPostDropdownMenuAction(
         React ? React.createElement(MdLabel) : MdLabel(),
@@ -2006,13 +2200,13 @@
         }
       );
       applySettings();
-      this.unsubscribe = store.subscribe(applySettings);
+      this.unsubscribe = store.subscribe(() => { applySettings(); ReadReceipts.onStoreChange(); });
 
       let queued = false;
       this.observer = new MutationObserver(() => {
         if (queued) return;
         queued = true;
-        requestAnimationFrame(() => { queued = false; applyCodeBlocksLTR(); Stamps.apply(); RtlMirror.schedule(); });
+        requestAnimationFrame(() => { queued = false; applyCodeBlocksLTR(); Stamps.apply(); ReadReceipts.apply(); RtlMirror.schedule(); });
       });
       this.observer.observe(document.documentElement, { childList: true, subtree: true });
     }

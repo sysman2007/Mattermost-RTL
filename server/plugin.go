@@ -25,8 +25,9 @@ type Plugin struct {
 	configLock sync.RWMutex
 	config     configuration
 
-	llm     *llmClient
-	limiter *rateLimiter
+	llm      *llmClient
+	limiter  *rateLimiter
+	receipts *receipts
 	// The model serves one request at a time, so so do we.
 	slot chan struct{}
 }
@@ -40,6 +41,7 @@ const (
 func (p *Plugin) OnActivate() error {
 	p.llm = &llmClient{http: &http.Client{}}
 	p.limiter = newRateLimiter()
+	p.receipts = newReceipts()
 	p.slot = make(chan struct{}, 1)
 	return nil
 }
@@ -50,8 +52,10 @@ func (p *Plugin) OnConfigurationChange() error {
 		return err
 	}
 	c = c.normalized()
+	// A bad AI setting turns only that feature off; the plugin keeps running.
 	if err := c.validate(); err != nil {
-		return err
+		p.API.LogWarn("AI markdown disabled: invalid settings", "error", err.Error())
+		c.EnableAIMarkdown = false
 	}
 	p.configLock.Lock()
 	p.config = c
@@ -77,6 +81,12 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": p.getConfig().EnableAIMarkdown})
 	case r.URL.Path == "/api/v1/ai/markdown" && r.Method == http.MethodPost:
 		p.handleMarkdown(w, r, userID)
+	case r.URL.Path == "/api/v1/receipts/status" && r.Method == http.MethodGet:
+		p.handleReceiptsStatus(w, userID)
+	case r.URL.Path == "/api/v1/receipts/ack" && r.Method == http.MethodPost:
+		p.handleReceiptsAck(w, userID)
+	case r.URL.Path == "/api/v1/receipts" && r.Method == http.MethodPost:
+		p.handleReceipts(w, r, userID)
 	default:
 		writeError(w, http.StatusNotFound, "not_found")
 	}
