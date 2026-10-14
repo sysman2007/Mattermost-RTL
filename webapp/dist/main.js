@@ -307,8 +307,11 @@
     const ICONS = {
       rtl: '<svg viewBox="0 0 16 16"><path d="M2 3h12M6 6.5h8M2 10h12M6 13.5h8"/></svg>',
       ltr: '<svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h8M2 10h12M2 13.5h8"/></svg>',
-      auto: '<svg viewBox="0 0 16 16"><path d="M3.5 13 8 3l4.5 10M5.2 9.5h5.6"/></svg>'
+      auto: '<svg viewBox="0 0 16 16"><path d="M3.5 13 8 3l4.5 10M5.2 9.5h5.6"/></svg>',
+      md: '<svg viewBox="0 0 16 16"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5"/><path d="M4 10V6l1.75 2L7.5 6v4M11 6v4m-1.5-1.5L11 10l1.5-1.5"/></svg>'
     };
+    let onMarkdown = null;
+    const setMarkdownAction = fn => { onMarkdown = fn; };
 
     function injectCSS() {
       if (document.getElementById('mmrtl-bidi-style')) return;
@@ -358,12 +361,14 @@
       bar.innerHTML = `
         <button type="button" data-dir="rtl" title="راست‌به‌چپ (RTL)">${ICONS.rtl}</button>
         <button type="button" data-dir="ltr" title="چپ‌به‌راست (LTR)">${ICONS.ltr}</button>
-        <button type="button" data-dir="auto" title="خودکار">${ICONS.auto}</button>`;
+        <button type="button" data-dir="auto" title="خودکار">${ICONS.auto}</button>
+        <button type="button" data-act="md" title="${L('نمایش و دانلود به‌صورت Markdown', 'View and download as Markdown')}">${ICONS.md}</button>`;
       bar.addEventListener('mousedown', e => e.preventDefault());
       bar.addEventListener('click', e => {
         const btn = e.target.closest('button');
         if (!btn || !current) return;
         e.stopPropagation();
+        if (btn.dataset.act === 'md') { onMarkdown?.(current); return; }
         choose(current, btn.dataset.dir);
       });
       bar.addEventListener('mouseenter', () => clearTimeout(hideTimer));
@@ -375,7 +380,9 @@
     function refreshButtons() {
       if (!bar || !current) return;
       const mode = current.dataset.mmrtlDir === 'user' ? current.getAttribute('dir') : 'auto';
-      bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.dir === mode));
+      bar.querySelectorAll('button[data-dir]').forEach(b => b.classList.toggle('on', b.dataset.dir === mode));
+      const md = bar.querySelector('[data-act="md"]');
+      if (md) md.hidden = !onMarkdown;
     }
 
     function placeBar() {
@@ -510,7 +517,7 @@
       });
     }
 
-    return { configure };
+    return { configure, setMarkdownAction };
   })();
 
   // ── Collapsible left sidebar (Mattermost): click the header logo to toggle.
@@ -580,9 +587,10 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on' };
   let last = '';
   let sidebarOn = false;
+  let mdExportOn = true;
 
   function readSettings() {
     const prefs = store?.getState()?.entities?.preferences?.myPreferences || {};
@@ -619,6 +627,8 @@
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
     MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on' });
+    mdExportOn = s.md_export === 'on';
+    Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     applyCodeBlocksLTR();
   }
 
@@ -1450,7 +1460,314 @@
 
     function configure({ markdown, data }) { enabled.markdown = markdown; enabled.data = data; }
 
-    return { register, configure, canPreview };
+    // A preview frame for Markdown text that's already in memory (no file fetch).
+    function createFrame(md) {
+      injectCSS();
+      const frame = document.createElement('iframe');
+      frame.className = 'mmrtl-md-frame';
+      frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+      frame.referrerPolicy = 'no-referrer';
+      frame.srcdoc = srcdoc();
+      let sent = false;
+      const onMessage = async e => {
+        if (!frame.isConnected) { window.removeEventListener('message', onMessage); return; }
+        if (sent || e.source !== frame.contentWindow || e.data?.type !== 'mmrtl-md-ready') return;
+        sent = true;
+        window.removeEventListener('message', onMessage);
+        const font = await loadFont();
+        frame.contentWindow?.postMessage({ type: 'mmrtl-md-render', md, kind: 'markdown', theme: theme(), font }, '*', font ? [font] : []);
+      };
+      window.addEventListener('message', onMessage);
+      return frame;
+    }
+
+    return { register, configure, canPreview, createFrame };
+  })();
+
+  // ── Message → Markdown: the «MD» button on the hover bar turns a post into a
+  // clean Markdown document (rule-based, no network), previews it in the
+  // sandboxed preview frame, and offers copy / download as .md.
+  const MdExport = (() => {
+    const FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+    const SEP = /^\s*([═=─━_*~#-])\1{4,}\s*$/;
+    const NUMBERED = /^\s*([0-9۰-۹]+)[).]\s+(.*)$/;
+    const BULLET = /^(\s*)[-*•]\s+(.*)$/;
+    const SECTION = /^(بخش|فاز|مرحله|گام|Part|Section|Phase|Step)\s+\S+?\s*[):.\-–]/i;
+    const ALREADY_MD = /^(#{1,6}\s|```|~~~|\|.*\|\s*$|>\s)/m;
+
+    const toAsciiDigits = s => s.replace(/[۰-۹]/g, d => String(FA_DIGITS.indexOf(d)));
+    const indentOf = s => s.match(/^\s*/)[0].length;
+    const isBlank = s => !s.trim();
+
+    // Wrap code-like tokens in backticks, outside existing code spans and URLs.
+    function codeSpans(line) {
+      return line.split(/(`[^`]*`|https?:\/\/\S+)/).map((part, i) => {
+        if (i % 2) return part;
+        return part
+          .replace(/\b(GET|POST|PUT|PATCH|DELETE)\s+(\/[\w/{}.:\-]+)/g, '`$1 $2`')
+          .replace(/(^|[\s(«])((?:\/[\w{}.\-]+){2,}\/?)(?=$|[\s)»،,.:;])/g, (m, pre, p) => `${pre}\`${p}\``)
+          .replace(/(^|[\s(«])((?:[A-Za-z_][\w-]*\/)+[\w.\-]+\.(?:cs|ts|tsx|js|jsx|json|md|py|go|java|sql|yml|yaml|xml|sh|css|html))(?=$|[\s)»،,:;])/g, (m, pre, p) => `${pre}\`${p}\``)
+          .replace(/(^|[\s(«])((?:[A-Za-z_][\w.\-]*\/){2,}[\w.\-]*)(?=$|[\s)»،,:;])/g, (m, pre, p) => `${pre}\`${p}\``)
+          .replace(/(^|[^\w`"/])([A-Za-z_]\w*(?:\.(?:"[^"\s]+"|[A-Za-z_]\w*))+)(?![\w`(])/g, (m, pre, id) => /[A-Z_"]/.test(id) && !/^(e\.g|i\.e|etc)\b/i.test(id) ? `${pre}\`${id}\`` : m)
+          .replace(/(^|[^\w`"/.])([a-z]+[A-Z]\w*|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*){2,}|[a-z]+_[a-z_0-9]+)(?![\w`])/g, '$1`$2`')
+          .replace(/(^|[\s(«])"([A-Za-z0-9_./:\-]+)"(?=$|[\s)»،,.:;|])/g, '$1`"$2"`');
+      }).join('');
+    }
+
+    // Collect a {…}/[…] block: from `i` until the brackets balance.
+    function takeBracketBlock(lines, i) {
+      let depth = 0;
+      const out = [];
+      for (let j = i; j < lines.length; j++) {
+        const t = lines[j].replace(/\/\/.*$/, '').replace(/"(?:[^"\\]|\\.)*"/g, '');
+        for (const c of t) {
+          if (c === '{' || c === '[') depth++;
+          else if (c === '}' || c === ']') depth--;
+        }
+        out.push(lines[j]);
+        if (depth <= 0) return { block: out, next: j + 1 };
+        if (out.length > 200) break;
+      }
+      return null;
+    }
+
+    function dedent(lines) {
+      const ind = Math.min(...lines.filter(l => l.trim()).map(indentOf));
+      return lines.map(l => l.slice(Number.isFinite(ind) ? ind : 0));
+    }
+
+    function convertBody(text) {
+      const lines = text.replace(/\r\n?/g, '\n').split('\n');
+      const out = [];
+      const emit = s => out.push(s);
+      const blank = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
+      const nextContent = from => { for (let k = from; k < lines.length; k++) if (!isBlank(lines[k])) return k; return -1; };
+      let inFence = false;
+      let listContext = false;
+      let bulletIndents = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const t = raw.trim();
+        if (/^(```|~~~)/.test(t)) { inFence = !inFence; emit(raw); continue; }
+        if (inFence) { emit(raw); continue; }
+        if (!t) { blank(); listContext = false; bulletIndents = []; continue; }
+
+        // ═══ / ─── separators; a line framed by two separators is a section title.
+        if (SEP.test(t)) {
+          const k = nextContent(i + 1);
+          const k2 = k >= 0 ? nextContent(k + 1) : -1;
+          if (k >= 0 && k2 >= 0 && SEP.test(lines[k2].trim()) && lines[k].trim().length <= 120) {
+            blank(); emit('---'); blank(); emit(`## ${codeSpans(lines[k].trim())}`); blank();
+            i = k2;
+          } else { blank(); emit('---'); blank(); }
+          listContext = false;
+          continue;
+        }
+
+        // JSON-like or code-like bracket blocks → fenced code.
+        if (/^[{[]/.test(t)) {
+          const got = takeBracketBlock(lines, i);
+          if (got && got.block.length > 1) {
+            const looksJson = /"[^"]+"\s*:/.test(got.block.join('\n'));
+            blank(); emit('```' + (looksJson ? 'jsonc' : 'text')); dedent(got.block).forEach(emit); emit('```'); blank();
+            i = got.next - 1;
+            continue;
+          }
+        }
+
+        if (/^(?:⚠|❗|❌|(?:نکته|توجه|هشدار|Note|Warning)\s*[:：])/u.test(t) && indentOf(raw) < 2 && !listContext) {
+          blank(); emit(`> ${codeSpans(t)}`); blank();
+          continue;
+        }
+
+        if (SECTION.test(t) && t.length <= 160) { blank(); emit(`## ${codeSpans(t)}`); blank(); listContext = false; continue; }
+
+        // «۱) …» — a section heading when it introduces indented/structured content, else a list item.
+        const num = t.match(NUMBERED);
+        if (num && indentOf(raw) < 2) {
+          const k = nextContent(i + 1);
+          const introducesBlock = k >= 0 && (indentOf(lines[k]) >= 2 || /^[{[]/.test(lines[k].trim()));
+          if (introducesBlock && t.length <= 160) {
+            blank(); emit(`### ${codeSpans(t)}`); blank(); listContext = false;
+          } else {
+            emit(`${toAsciiDigits(num[1])}. ${codeSpans(num[2])}`); listContext = true;
+          }
+          continue;
+        }
+
+        const bul = raw.match(BULLET);
+        if (bul) {
+          // Nest only when this bullet is indented deeper than the one before it.
+          const ind = bul[1].length;
+          if (!listContext) bulletIndents = [];
+          while (bulletIndents.length && ind < bulletIndents[bulletIndents.length - 1]) bulletIndents.pop();
+          if (!bulletIndents.length || ind > bulletIndents[bulletIndents.length - 1]) bulletIndents.push(ind);
+          const depth = '  '.repeat(Math.min(bulletIndents.length - 1, 2));
+          emit(`${depth}- ${codeSpans(bul[2])}`); listContext = true;
+          continue;
+        }
+
+        // Indented continuation under a list item.
+        if (listContext && indentOf(raw) >= 2) { emit(`  ${codeSpans(t)}`); continue; }
+
+        // Plain text: keep the author's line breaks.
+        const prev = out[out.length - 1];
+        if (prev && !/^(#|---|```|>|- |\s*\d+\. )/.test(prev) && prev !== '') out[out.length - 1] = `${prev}  `;
+        emit(codeSpans(t));
+        listContext = false;
+      }
+      return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    // Pure: post text + metadata → Markdown document.
+    function toMarkdown(text, meta = {}) {
+      text = String(text || '').trim();
+      let body = ALREADY_MD.test(text) ? text : convertBody(text);
+      const head = [];
+      // A short first line that reads as a title becomes the H1 (instead of being repeated).
+      const lines = body.split('\n');
+      const first = lines[0] || '';
+      if (!/^#{1,2}\s/.test(first) && first.length <= 80 && !/[.!?؟:،,]\s*$/.test(first) && lines[1] === '' && lines.slice(2).some(l => l.trim()) && !/^(- |\d+\. |>|```)/.test(first)) {
+        head.push(`# ${first.replace(/\s+$/, '')}`, '');
+        body = lines.slice(2).join('\n');
+      }
+      const info = [
+        meta.author && `**نویسنده:** ${meta.author}`,
+        meta.channel && `**کانال:** ${meta.channel}`,
+        meta.date && `**تاریخ:** ${meta.date}`
+      ].filter(Boolean);
+      if (info.length) head.push(`> ${info.join(' · ')}`, '');
+      return `${head.length ? `${head.join('\n')}\n` : ''}${body}\n`;
+    }
+
+    function titleFrom(text) {
+      const line = String(text || '').split('\n').map(l => l.replace(/[#*`>═=─_~]+/g, '').trim()).find(Boolean) || 'message';
+      return line.length > 70 ? line.slice(0, 70).replace(/\s+\S*$/, '') : line;
+    }
+
+    // ZWNJ becomes a space: browsers turn it into "_" in download names.
+    const fileName = title => `${title.replace(/[\\/:*?"<>|\u0000-\u001f\u200c…]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'message'}.md`;
+
+    // ── UI ──
+    let overlay = null;
+
+    function postFor(msgEl) {
+      const holder = msgEl.closest('[id^="post_"], [id^="rhsPost_"], [id^="searchResult_"]');
+      const m = (holder?.id || '').match(/_([a-z0-9]{26})$/);
+      return m ? store.getState().entities.posts.posts[m[1]] : null;
+    }
+
+    function metaFor(post) {
+      const e = store.getState().entities;
+      const u = e.users.profiles[post.user_id];
+      const ch = e.channels.channels[post.channel_id];
+      const date = new Intl.DateTimeFormat(isFa() ? 'fa-IR' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(post.create_at));
+      return {
+        author: u ? `@${u.username}` : '',
+        channel: ch && ch.type !== 'D' && ch.type !== 'G' ? `~${ch.display_name || ch.name}` : '',
+        date
+      };
+    }
+
+    function close() {
+      overlay?.remove();
+      overlay = null;
+      document.removeEventListener('keydown', onKey, true);
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } }
+
+    function download(md, name) {
+      const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function open(msgEl) {
+      const post = msgEl && postFor(msgEl);
+      if (!post || !post.message) return;
+      close();
+      injectCSS();
+      const title = titleFrom(post.message);
+      let md = toMarkdown(post.message, metaFor(post));
+
+      overlay = document.createElement('div');
+      overlay.className = 'mmrtl-mdx';
+      overlay.dir = isFa() ? 'rtl' : 'ltr';
+      overlay.innerHTML = `
+        <div class="mmrtl-mdx__box" role="dialog" aria-modal="true">
+          <div class="mmrtl-mdx__head">
+            <strong class="mmrtl-mdx__title" dir="auto"></strong>
+            <div class="mmrtl-mdx__tabs" role="tablist">
+              <button type="button" data-tab="preview" class="on">${L('پیش‌نمایش', 'Preview')}</button>
+              <button type="button" data-tab="source">${L('متن Markdown', 'Markdown source')}</button>
+            </div>
+            <button type="button" data-act="copy">${L('کپی', 'Copy')}</button>
+            <button type="button" data-act="download" class="primary">${L('دانلود .md', 'Download .md')}</button>
+            <button type="button" data-act="close" aria-label="${L('بستن', 'Close')}">✕</button>
+          </div>
+          <div class="mmrtl-mdx__body"></div>
+        </div>`;
+      overlay.querySelector('.mmrtl-mdx__title').textContent = fileName(title);
+      const body = overlay.querySelector('.mmrtl-mdx__body');
+      const source = document.createElement('textarea');
+      source.className = 'mmrtl-mdx__source';
+      source.dir = 'auto';
+      source.spellcheck = false;
+      source.value = md;
+      source.addEventListener('input', () => { md = source.value; });
+
+      const show = tab => {
+        overlay.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+        body.textContent = '';
+        body.appendChild(tab === 'source' ? source : MdPreview.createFrame(md));
+      };
+      overlay.addEventListener('click', e => {
+        if (e.target === overlay) return close();
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        if (btn.dataset.tab) show(btn.dataset.tab);
+        else if (btn.dataset.act === 'close') close();
+        else if (btn.dataset.act === 'download') download(md, fileName(title));
+        else if (btn.dataset.act === 'copy') {
+          navigator.clipboard?.writeText(md).then(() => {
+            const label = btn.textContent;
+            btn.textContent = '✓';
+            setTimeout(() => { btn.textContent = label; }, 1200);
+          }).catch(() => {});
+        }
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      show('preview');
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-mdx-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-mdx-style';
+      st.textContent = `
+        .mmrtl-mdx { position: fixed; inset: 0; z-index: 2147483001; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.5); }
+        .mmrtl-mdx__box { display: flex; flex-direction: column; width: min(1100px, 94vw); height: min(860px, 92vh); background: var(--center-channel-bg); color: var(--center-channel-color); border-radius: 10px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+        .mmrtl-mdx__head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .12); }
+        .mmrtl-mdx__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-mdx__head button { border: 1px solid rgba(var(--center-channel-color-rgb), .16); background: transparent; color: inherit; border-radius: 6px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+        .mmrtl-mdx__head button:hover { background: rgba(var(--center-channel-color-rgb), .08); }
+        .mmrtl-mdx__head button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
+        .mmrtl-mdx__tabs { display: flex; gap: 2px; }
+        .mmrtl-mdx__tabs button.on { background: rgba(var(--button-bg-rgb), .12); color: var(--button-bg); border-color: rgba(var(--button-bg-rgb), .4); }
+        .mmrtl-mdx__body { flex: 1; min-height: 0; display: flex; }
+        .mmrtl-mdx__body iframe { flex: 1; width: 100%; height: 100%; border: 0; }
+        .mmrtl-mdx__source { flex: 1; margin: 0; padding: 16px; border: 0; resize: none; background: transparent; color: inherit; font: 13.5px/1.7 Consolas, "Cascadia Code", monospace; unicode-bidi: plaintext; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    return { open, close, toMarkdown, titleFrom, fileName };
   })();
 
   class Plugin {
@@ -1474,6 +1791,7 @@
             { title: 'اصلاح متن فارسی', settings: [radio('fa_fix', 'اصلاح خودکار هنگام نوشتن', 'ي و ك عربی ← ی و ک فارسی، ارقام عربی ← فارسی، نیم‌فاصله در «می/نمی» و «ها». متن داخل کد تغییر نمی‌کند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
+            { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
@@ -1482,6 +1800,18 @@
       const React = window.React;
       const SendToLabel = () => L('ارسال به…', 'Send to…');
       MdPreview.register(registry);
+      const MdLabel = () => L('نمایش به‌صورت Markdown', 'View as Markdown');
+      registry.registerPostDropdownMenuAction(
+        React ? React.createElement(MdLabel) : MdLabel(),
+        postId => {
+          const el = document.querySelector(`#post_${postId} .post-message__text, #rhsPost_${postId} .post-message__text`);
+          if (el) MdExport.open(el);
+        },
+        postId => {
+          const post = store.getState().entities.posts.posts[postId];
+          return mdExportOn && Boolean(post?.message) && !(post.type || '').startsWith('system_');
+        }
+      );
       registry.registerPostDropdownMenuAction(
         React ? React.createElement(SendToLabel) : L('ارسال به…', 'Send to…'),
         postId => Forward.open(postId),
@@ -1517,5 +1847,5 @@
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
   // Node unit tests only; in the browser `module` is undefined.
-  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu };
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
 })();
