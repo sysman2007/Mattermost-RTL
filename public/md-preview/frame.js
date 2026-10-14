@@ -408,14 +408,27 @@
       `<div class="code-body"><pre class="code-scroll"><code class="language-${lang}">${escapeHtml(pretty)}</code></pre></div></figure>`;
   }
 
-  async function render({ md, kind, ext, theme, font }) {
+  // ── Source code files (Prism) ──
+  const MAX_CODE_HIGHLIGHT = 512 * 1024;
+
+  function renderCode(text, lang, name) {
+    text = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
+    const count = Math.max(1, text.split('\n').length);
+    const gutter = Array.from({ length: count }, (_, n) => n + 1).join('\n');
+    const useLang = text.length > MAX_CODE_HIGHLIGHT || !(window.Prism && Prism.languages[lang]) ? 'text' : lang;
+    return `<div class="data-info" dir="ltr">${escapeHtml(lang)} · ${count} lines</div>` +
+      `<figure class="code-card"><div class="code-head"><span class="language-label">${escapeHtml(name || lang)}</span><button type="button" class="copy-code">Copy</button></div>` +
+      `<div class="code-body"><pre class="code-gutter" aria-hidden="true">${gutter}</pre><pre class="code-scroll"><code class="language-${escapeHtml(useLang)}">${escapeHtml(text)}</code></pre></div></figure>`;
+  }
+
+  async function render({ md, kind, ext, lang, name, theme, font }) {
     document.body.dataset.theme = theme === 'dark' ? 'dark' : 'light';
     await loadFont(font);
-    if (kind === 'csv' || kind === 'json') {
+    if (kind === 'csv' || kind === 'json' || kind === 'code') {
       const article = document.createElement('article');
       article.id = 'content';
-      article.className = `data-view data-${kind}`;
-      article.innerHTML = kind === 'csv' ? renderCsv(String(md || ''), ext) : renderJson(md);
+      article.className = `data-view data-${kind === 'code' ? 'json' : kind}`;
+      article.innerHTML = kind === 'csv' ? renderCsv(String(md || ''), ext) : kind === 'json' ? renderJson(md) : renderCode(md, lang, name);
       document.body.textContent = '';
       document.body.appendChild(article);
       highlightCode(article);
@@ -484,5 +497,5 @@
     window.parent.postMessage({ type: 'mmrtl-md-ready' }, '*');
   }
 
-  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc, detectDelimiter, parseCsv, renderCsv, renderJson };
+  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc, detectDelimiter, parseCsv, renderCsv, renderJson, renderCode };
 })();
