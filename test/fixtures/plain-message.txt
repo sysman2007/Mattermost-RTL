@@ -1,0 +1,30 @@
+در erpapi (سرویس FIN) دو اندپوینتِ صفحهٔ «کارت مشتری» (/accounting/customer-card) را کامل کن.
+فرانت آماده است و با رسیدنِ این فیلدها، کنترل‌ها و کارت‌ها خودکار فعال می‌شوند.
+اندپوینتِ تازه‌ای ساخته نمی‌شود، پس ثبت در sec."Webservices" لازم نیست.
+
+══════════════════════════════════════════════════════════════
+بخش الف) POST /api/fin/credit/remain   (GetRemainCreditListHandler)
+══════════════════════════════════════════════════════════════
+
+۱) فیلترهای تازه در بدنهٔ درخواست — همه اختیاری؛ نبودنشان یعنی رفتارِ فعلی:
+   {
+     agGridRequest, searchText,              // بی‌تغییر
+     filters?: {
+       fromDate?:  "YYYY-MM-DD",   // بازهٔ تاریخِ گردش
+       balanceStatus?: "debtor" | "creditor" | "settled",
+       partyTypeIds?: Guid[]       // نوعِ طرف حساب
+     }
+   }
+   - همهٔ شرط‌ها با «و» ترکیب شوند، هم با searchText و هم با filterModelِ گرید.
+   - بندِ مالکیت (OwnershipFilters.RemainCreditInOwnBooks) دست نخورد و مستقل بماند.
+   - ⚠️ در این کدبیس Credit/Debit وارونه‌اند؛ معنای تجاریِ بالا ملاک است.
+
+۳) اکسلِ excelType = "customer-card" همان filters و searchText را رعایت کند.
+
+══════════════════════════════════════════════════════════════
+آزمون‌ها
+══════════════════════════════════════════════════════════════
+- credit/remain: هر فیلتر به‌تنهایی و summary برای حالتِ بی‌فیلتر.
+- کارایی: زمانِ credit/remain با summary روی dev سنجیده و گزارش شود.
+
+محل: erpapi، Services/Sal/Sal.Application/Process/Report/HomeDashboard/ — DTOهای HomeDashboardDtos.cs

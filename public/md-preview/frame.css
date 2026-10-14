@@ -55,3 +55,16 @@ pre code { white-space: pre; }
 #toc a[dir=rtl] { font-family: Vazirmatn, Tahoma, sans-serif; }
 #toc .lv2 { padding-inline-start: 20px; } #toc .lv3 { padding-inline-start: 32px; } #toc .lv4, #toc .lv5, #toc .lv6 { padding-inline-start: 44px; color: var(--muted); }
 body:has(#toc-toggle) { padding-top: 56px; }
+/* CSV / JSON */
+article.data-view { max-width: none; padding: 16px; }
+.data-info { margin: 0 0 10px; color: var(--muted); font: 13px/1.6 system-ui, sans-serif; }
+.data-error { color: #ef4444; }
+.data-table { max-height: calc(100vh - 140px); margin: 0; }
+.data-table table { width: auto; min-width: 100%; font-size: 14px; }
+.data-table th { position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.data-table td, .data-table th { padding: 6px 10px; border-inline-end: 1px solid var(--border); vertical-align: top; }
+.data-table td { white-space: pre-wrap; max-width: 480px; }
+.data-table .num { text-align: right; direction: ltr; font-variant-numeric: tabular-nums; }
+.data-table .rownum { color: var(--muted); text-align: right; background: var(--surface2); user-select: none; font-variant-numeric: tabular-nums; }
+.data-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.data-json .code-card { margin: 0; }
