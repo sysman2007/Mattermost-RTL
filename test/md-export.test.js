@@ -54,7 +54,7 @@ test('short first line becomes the title; notes become callouts; line breaks kep
   const out = toMarkdown('گزارش هفتگی\n\nخط یک\nخط دو\n\nنکته: deploy پنجشنبه است.');
   assert.match(out, /^# گزارش هفتگی\n\n/);
   assert.match(out, /خط یک {2}\nخط دو/);
-  assert.match(out, /> نکته: deploy پنجشنبه است\./);
+  assert.match(out, /> \*\*نکته:\*\* deploy پنجشنبه است\./);
 });
 
 test('text that is already Markdown is kept as is', () => {
@@ -67,4 +67,43 @@ test('title and file name', () => {
   assert.equal(fileName('a/b:c*?"<>|d'), 'a b c d.md');
   assert.equal(fileName('گزارش\u200cها'), 'گزارش ها.md');
   assert.ok(fileName('x'.repeat(200)).length <= 63);
+});
+
+// Real-world team messages (test/fixtures/msg-*.txt).
+const conv = name => toMarkdown(fs.readFileSync(path.join(__dirname, `fixtures/${name}.txt`), 'utf8'));
+
+test('label + key/value lines become a list with bold keys, nested under a sub-label', () => {
+  const out = conv('msg-litellm');
+  assert.match(out, /## داخلِ فایل\n\n- \*\*مشخصاتِ اتصال:\*\* /);
+  assert.match(out, /- \*\*دو نکته از رفتارِ فعلیِ برنامه‌اش:\*\*\n {2}- \*\*سقفِ خروجی:\*\* همیشه `max_tokens` بفرستد/);
+  assert.match(out, /\n {2}- \*\*embedding:\*\* /);
+  for (const tok of ['`litellm-key-erpapi-chatbot-dev.md`', '`erpapi-chatbot-dev`', '`gpt.ibarsam.com`', '`Llm__ApiKey`', '`Microsoft.Extensions.AI`']) assert.ok(out.includes(tok), tok);
+  assert.ok(out.includes('https://gpt.ibarsam.com/v1'), 'URL left as a link');
+});
+
+test('a leading «label:» line is the title; «کلید: …» paragraphs get a bold key; «یک نکته:» is a callout', () => {
+  const out = conv('msg-401');
+  assert.match(out, /^# علت 401\n\n/);
+  assert.match(out, /\n\*\*اقدام تیم:\*\* دوباره لاگین کنند/);
+  assert.match(out, /\n> \*\*یک نکته:\*\* این توکن/);
+  assert.ok(out.includes('`sec."UserRefreshTokens"`') && out.includes('`sec/check`') && out.includes('`Sal.Api`'));
+});
+
+test('«۱) …:» followed by bullets is a ### section; bullet keys stay code', () => {
+  const out = conv('msg-dashboard');
+  assert.match(out, /\n### ۱\) receivable \(مطالبات\)/);
+  assert.match(out, /\n### ۲\) commission/);
+  assert.match(out, /\n- `dueTodayAmount` \(decimal\): جمعِ/);
+  assert.match(out, /\*\*محل:\*\* erpapi، `Services\/Sal\/Sal\.Application\/Process\/Report\/HomeDashboard\/`/);
+  assert.ok(out.includes('`fromDate/toDate`') && out.includes('`ReceivableDto`') && out.includes('`erp_front`'));
+});
+
+test('standalone short lines become sections; «۱. …» alone becomes ###; commit hash is code', () => {
+  const out = conv('msg-warehouse');
+  assert.match(out, /\n### ۱\. عملکرد من برای همه\n/);
+  assert.match(out, /\n### ۳\. `isLocked`\n/);
+  assert.match(out, /\n## تست‌ها\n/);
+  assert.match(out, /\n## موضوع باز برای تیم فرانت\n/);
+  assert.ok(out.includes('`25a2c12d`') && out.includes('`origin/dev`') && out.includes('`warehouses[]`'));
+  assert.match(out, /^سلام، سه اصلاح/);
 });

@@ -1509,10 +1509,32 @@
           .replace(/(^|[\s(«])((?:[A-Za-z_][\w-]*\/)+[\w.\-]+\.(?:cs|ts|tsx|js|jsx|json|md|py|go|java|sql|yml|yaml|xml|sh|css|html))(?=$|[\s)»،,:;])/g, (m, pre, p) => `${pre}\`${p}\``)
           .replace(/(^|[\s(«])((?:[A-Za-z_][\w.\-]*\/){2,}[\w.\-]*)(?=$|[\s)»،,:;])/g, (m, pre, p) => `${pre}\`${p}\``)
           .replace(/(^|[^\w`"/])([A-Za-z_]\w*(?:\.(?:"[^"\s]+"|[A-Za-z_]\w*))+)(?![\w`(])/g, (m, pre, id) => /[A-Z_"]/.test(id) && !/^(e\.g|i\.e|etc)\b/i.test(id) ? `${pre}\`${id}\`` : m)
-          .replace(/(^|[^\w`"/.])([a-z]+[A-Z]\w*|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*){2,}|[a-z]+_[a-z_0-9]+)(?![\w`])/g, '$1`$2`')
-          .replace(/(^|[\s(«])"([A-Za-z0-9_./:\-]+)"(?=$|[\s)»،,.:;|])/g, '$1`"$2"`');
+          .replace(/(^|[\s(«])([a-z]+[A-Z]\w*(?:\/|\.\.)[a-z]+[A-Z]\w*)(?=$|[\s)»،,.:;])/g, '$1`$2`')
+          .replace(/(^|[\s(«])([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|ir|io|net|org|local|dev|internal))(?=$|[\s)»،,:;]|\.\s|\.$)/g, '$1`$2`')
+          .replace(/(^|[\s(«])([a-z][a-z0-9]*(?:-[a-z0-9]+){2,})(?=$|[\s)»،,:;]|\.(?!\w))/g, '$1`$2`')
+          .replace(/(^|[\s(«])([a-z][\w-]*\/[a-z][\w-]*)(?=$|[\s)»،,:;]|\.(?!\w))/g, '$1`$2`')
+          .replace(/(^|[^\w`"/.])([a-z]+[A-Z]\w*|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*){1,}|[a-z]+_[a-z_0-9]+)(?![\w`])/g, '$1`$2`')
+          .replace(/(^|[\s(«])"([A-Za-z0-9_./:\-]+)"(?=$|[\s)»،,.:;|])/g, '$1`"$2"`')
+          .replace(/(^|[\s(«])([\w-]+\.(?:md|cs|ts|tsx|js|jsx|json|py|go|java|sql|yml|yaml|xml|sh|csv|env|txt|log))(?=$|[\s)»،,:;])/g, '$1`$2`')
+          .replace(/(^|[\s(«])([A-Za-z]\w*__\w+|[a-z]\w*\[\])(?=$|[\s)»،,.:;])/g, '$1`$2`')
+          .replace(/(^|[\s(«])((?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,40})(?=$|[\s)»،,.:;])/g, '$1`$2`');
       }).join('');
     }
+
+    // «کلید: مقدار» — a short label (≤ 4 words, no code/parens/URL) before a colon.
+    const KV = /^([^\s:`()«»][^:`()«»]{0,34}?)\s*[:：]\s+(\S.*)$/;
+    const kvOf = t => {
+      const m = t.match(KV);
+      if (!m || m[1].trim().split(/\s+/).length > 4 || /^\d+$/.test(m[1].trim()) || /https?$/i.test(m[1])) return null;
+      return { key: m[1].trim(), value: m[2] };
+    };
+    // A line that only introduces what follows: ends with a colon, no value.
+    const isLabel = t => /[:：]$/.test(t) && t.length <= 90 && !/^[-*•]\s/.test(t);
+    const boldKey = t => {
+      const kv = kvOf(t);
+      return kv ? `**${kv.key}:** ${codeSpans(kv.value)}` : codeSpans(t);
+    };
+    const ENDS_SENTENCE = /[.!?؟؛،,]$/;
 
     // Collect a {…}/[…] block: from `i` until the brackets balance.
     function takeBracketBlock(lines, i) {
@@ -1577,7 +1599,7 @@
         }
 
         if (/^(?:⚠|❗|❌|(?:نکته|توجه|هشدار|Note|Warning)\s*[:：])/u.test(t) && indentOf(raw) < 2 && !listContext) {
-          blank(); emit(`> ${codeSpans(t)}`); blank();
+          blank(); emit(`> ${boldKey(t)}`); blank();
           continue;
         }
 
@@ -1587,8 +1609,10 @@
         const num = t.match(NUMBERED);
         if (num && indentOf(raw) < 2) {
           const k = nextContent(i + 1);
-          const introducesBlock = k >= 0 && (indentOf(lines[k]) >= 2 || /^[{[]/.test(lines[k].trim()));
-          if (introducesBlock && t.length <= 160) {
+          const introducesBlock = k >= 0 && k === i + 1 && (indentOf(lines[k]) >= 2 || /^[{[]/.test(lines[k].trim()) || BULLET.test(lines[k]));
+          // «۱. عنوان» standing alone between blank lines, followed by prose → heading
+          const standalone = (i === 0 || isBlank(lines[i - 1])) && k > i + 1 && t.length <= 70 && !ENDS_SENTENCE.test(t) && !NUMBERED.test(lines[k]);
+          if ((introducesBlock || standalone) && t.length <= 160) {
             blank(); emit(`### ${codeSpans(t)}`); blank(); listContext = false;
           } else {
             emit(`${toAsciiDigits(num[1])}. ${codeSpans(num[2])}`); listContext = true;
@@ -1604,17 +1628,54 @@
           while (bulletIndents.length && ind < bulletIndents[bulletIndents.length - 1]) bulletIndents.pop();
           if (!bulletIndents.length || ind > bulletIndents[bulletIndents.length - 1]) bulletIndents.push(ind);
           const depth = '  '.repeat(Math.min(bulletIndents.length - 1, 2));
-          emit(`${depth}- ${codeSpans(bul[2])}`); listContext = true;
+          emit(`${depth}- ${boldKey(bul[2])}`); listContext = true;
           continue;
+        }
+
+        // Standalone short line between blank lines → section heading («تست‌ها»، «علت 401:»).
+        if ((i === 0 || isBlank(lines[i - 1])) && i + 1 < lines.length && isBlank(lines[i + 1]) && nextContent(i + 1) >= 0 &&
+            t.length <= 60 && !ENDS_SENTENCE.test(t) && !kvOf(t)) {
+          blank(); emit(`## ${codeSpans(t.replace(/\s*[:：]$/, ''))}`); blank(); listContext = false;
+          continue;
+        }
+
+        // A block of consecutive «key: value» / «label:» lines → a bulleted list with bold keys;
+        // lines after a label (until the next label or blank line) nest under it.
+        {
+          let j = i;
+          const block = [];
+          while (j < lines.length && !isBlank(lines[j]) && !BULLET.test(lines[j]) && !SEP.test(lines[j].trim())) block.push(lines[j++].trim());
+          const structured = block.filter(l => kvOf(l) || isLabel(l)).length;
+          if (block.length >= 2 && structured >= Math.max(2, Math.ceil(block.length * 0.6))) {
+            blank();
+            let nested = false;
+            for (const l of block) {
+              if (isLabel(l) && !kvOf(l)) { emit(`- **${codeSpans(l.replace(/\s*[:：]$/, ''))}:**`); nested = true; continue; }
+              emit(`${nested ? '  ' : ''}- ${boldKey(l)}`);
+            }
+            blank(); listContext = false;
+            i = j - 1;
+            continue;
+          }
+          // A label followed directly by plain lines → bold label + bullets.
+          if (isLabel(t) && block.length >= 3 && block.slice(1).every(l => !isLabel(l) && l.length <= 140)) {
+            blank(); emit(`**${codeSpans(t.replace(/\s*[:：]$/, ''))}:**`); blank();
+            block.slice(1).forEach(l => emit(`- ${boldKey(l)}`));
+            blank(); listContext = false;
+            i = j - 1;
+            continue;
+          }
         }
 
         // Indented continuation under a list item.
         if (listContext && indentOf(raw) >= 2) { emit(`  ${codeSpans(t)}`); continue; }
 
-        // Plain text: keep the author's line breaks.
+        // Plain text: keep the author's line breaks; «کلید: …» gets a bold key.
         const prev = out[out.length - 1];
         if (prev && !/^(#|---|```|>|- |\s*\d+\. )/.test(prev) && prev !== '') out[out.length - 1] = `${prev}  `;
-        emit(codeSpans(t));
+        if (isLabel(t) && !kvOf(t)) emit(`**${codeSpans(t.replace(/\s*[:：]$/, ''))}:**`);
+        else if (/^(یک )?(نکته|توجه|هشدار)\s*[:：]/.test(t)) { blank(); emit(`> ${boldKey(t)}`); blank(); }
+        else emit(boldKey(t));
         listContext = false;
       }
       return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -1626,6 +1687,8 @@
       let body = ALREADY_MD.test(text) ? text : convertBody(text);
       const head = [];
       // A short first line that reads as a title becomes the H1 (instead of being repeated).
+      // A section heading that opens the message is really its title.
+      if (/^## /.test(body) && !/^# /m.test(body)) body = body.slice(1);
       const lines = body.split('\n');
       const first = lines[0] || '';
       if (!/^#{1,2}\s/.test(first) && first.length <= 80 && !/[.!?؟:،,]\s*$/.test(first) && lines[1] === '' && lines.slice(2).some(l => l.trim()) && !/^(- |\d+\. |>|```)/.test(first)) {

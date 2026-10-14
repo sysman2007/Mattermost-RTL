@@ -1,0 +1,12 @@
+تکمیلِ دادهٔ دو کارتِ «مطالبات» و «پورسانت فروش» در داشبوردِ مدیریتِ صفحهٔ خانه — POST /api/sal/home/dashboard/executive (کدِ ۱).
+محل: erpapi، Services/Sal/Sal.Application/Process/Report/HomeDashboard/ — DTOهای HomeDashboardDtos.cs (ReceivableDto و CommissionDto در HomeDashboardBaseDto) و هندلرِ داشبوردِ مدیریت در HomeDashboardQueries.cs.
+فرانت (erp_front) کارت‌ها را با طرحِ جدید ساخته؛ فیلدهای زیر الان «—» نشان داده می‌شوند. نامِ فیلدها پیشنهاد است؛ اگر عوض شد، به فرانت خبر بدهید.
+
+۱) receivable (مطالبات) — وضعیتِ فعلی، مستقل از بازهٔ fromDate/toDate، مثلِ totalAmount و overdueAmount فعلی:
+- dueTodayAmount (decimal): جمعِ ماندهٔ مطالباتی که سررسیدشان امروز است.
+- dueTodayCount (int): تعدادِ طرف‌حسابِ متمایزِ همان مطالبات.
+- collectedAmount (decimal): مبلغِ وصول‌شدهٔ مطالبات. پیشنهاد: در بازهٔ انتخابی (fromDate..toDate)؛ اگر تصمیم دیگری گرفتید (مثلاً فقط امروز)، در پاسخ بنویسید تا عنوانِ کارت هم‌خوان شود.
+- collectedCount (int): تعدادِ طرف‌حسابِ متمایزِ وصول‌شده‌ها در همان دامنه.
+
+۲) commission (پورسانت فروش) — همان منبعِ فعلی (فقط برنامه‌های قفل‌شده):
+- approvedAmount (decimal): جمعِ پورسانتِ تأییدشده.
