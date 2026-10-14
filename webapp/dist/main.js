@@ -587,7 +587,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -630,6 +630,7 @@
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     ReadReceipts.configure(s.read_receipts === 'on');
+    PasteAsFile.configure(s.paste_as_file === 'on');
     applyCodeBlocksLTR();
   }
 
@@ -2149,6 +2150,120 @@
     return { init, configure, apply, onStoreChange };
   })();
 
+  // ── Paste long text as a .md file: after a long paste into the message (or
+  // reply) box, a small bar offers to turn it into a Markdown attachment —
+  // raw, or tidied with the Markdown converter. The file goes through
+  // Mattermost's own paste-a-file path, so it appears as a normal attachment
+  // and the user can still add a caption before sending.
+  const PasteAsFile = (() => {
+    const BOXES = '#post_textbox, #reply_textbox';
+    const MIN_LINES = 10, MIN_CHARS = 1000, BAR_TTL = 20000;
+    let on = true;
+    let bar = null;
+    let barTimer = null;
+    let injecting = false;
+
+    // Pure: is this paste long enough to offer the file option?
+    const isLong = text => {
+      const t = String(text || '');
+      return t.length >= MIN_CHARS || t.split('\n').length >= MIN_LINES;
+    };
+
+    function setValue(ta, value) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, value);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function hideBar() {
+      clearTimeout(barTimer);
+      bar?.remove();
+      bar = null;
+    }
+
+    function attach(ta, text, tidy) {
+      // Take the pasted text back out of the box (wherever it now is).
+      const at = ta.value.indexOf(text);
+      if (at >= 0) setValue(ta, ta.value.slice(0, at) + ta.value.slice(at + text.length));
+      const md = tidy ? MdExport.toMarkdown(text) : (text.endsWith('\n') ? text : `${text}\n`);
+      const file = new File([md], MdExport.fileName(MdExport.titleFrom(text)), { type: 'text/markdown' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      ta.focus();
+      injecting = true;
+      try { ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); } finally { injecting = false; }
+    }
+
+    function showBar(ta, text) {
+      hideBar();
+      injectCSS();
+      bar = document.createElement('div');
+      bar.className = 'mmrtl-paf';
+      bar.dir = isFa() ? 'rtl' : 'ltr';
+      const lines = text.split('\n').length;
+      bar.innerHTML = `<span>📄 ${L(`متن بلندی چسباندید (${Number(lines).toLocaleString('fa-IR')} خط).`, `Long text pasted (${lines} lines).`)}</span>
+        <button type="button" data-act="raw">${L('ارسال به‌صورت فایل .md', 'Send as .md file')}</button>
+        <button type="button" data-act="tidy">${L('فایل .md مرتب‌شده', 'Tidied .md file')}</button>
+        <button type="button" data-act="keep" class="plain">${L('همان متن', 'Keep as text')}</button>`;
+      bar.addEventListener('mousedown', e => e.preventDefault()); // keep the caret in the box
+      bar.addEventListener('click', e => {
+        const act = e.target.closest('button')?.dataset.act;
+        if (!act) return;
+        if (act !== 'keep' && ta.isConnected) attach(ta, text, act === 'tidy');
+        hideBar();
+      });
+      document.body.appendChild(bar);
+      const r = ta.getBoundingClientRect();
+      bar.style.left = `${Math.max(8, r.left)}px`;
+      bar.style.width = `${Math.min(r.width, innerWidth - 16)}px`;
+      bar.style.top = `${Math.max(8, r.top - bar.offsetHeight - 6)}px`;
+      barTimer = setTimeout(hideBar, BAR_TTL);
+    }
+
+    function onPaste(e) {
+      if (!on || injecting || e.defaultPrevented) return;
+      const ta = e.target;
+      if (!(ta instanceof HTMLTextAreaElement) || !ta.matches(BOXES)) return;
+      const cd = e.clipboardData;
+      if (!cd || (cd.files && cd.files.length)) return; // files/images: Mattermost handles them
+      const text = cd.getData('text/plain');
+      if (!isLong(text)) return;
+      // Let the normal paste happen; only offer the alternative.
+      setTimeout(() => showBar(ta, text.replace(/\r\n?/g, '\n')), 0);
+    }
+
+    function onKey(e) {
+      if (bar && e.key === 'Escape') hideBar();
+      else if (bar && e.key === 'Enter' && !e.shiftKey && e.target.matches?.(BOXES)) hideBar(); // message sent as text
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-paf-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-paf-style';
+      st.textContent = `
+        .mmrtl-paf { position: fixed; z-index: 2147482999; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px;
+          background: var(--center-channel-bg); color: var(--center-channel-color); border: 1px solid rgba(var(--center-channel-color-rgb), .16); box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 13px; }
+        .mmrtl-paf span { flex: 1 1 auto; }
+        .mmrtl-paf button { border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; background: var(--button-bg); color: var(--button-color); }
+        .mmrtl-paf button.plain { background: transparent; color: inherit; border: 1px solid rgba(var(--center-channel-color-rgb), .2); }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    let listening = false;
+    function configure(enabled) {
+      on = enabled;
+      if (!on) hideBar();
+      if (on && !listening) {
+        listening = true;
+        document.addEventListener('paste', onPaste, true);
+        document.addEventListener('keydown', onKey, true);
+      }
+    }
+
+    return { configure, isLong };
+  })();
+
   class Plugin {
     initialize(registry, reduxStore) {
       store = reduxStore;
@@ -2171,6 +2286,7 @@
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
             { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
+            { title: 'چسباندن متن بلند به‌صورت فایل', settings: [radio('paste_as_file', 'پیشنهاد ارسال متن بلند به‌صورت فایل .md', 'بعد از چسباندن متن بلند (۱۰ خط یا ۱۰۰۰ کاراکتر به بالا) در کادر پیام، نواری پیشنهاد می‌دهد آن را به‌صورت پیوست .md (خام یا مرتب‌شده) بفرستید. متن‌های کوتاه و فایل‌ها دست نمی‌خورند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'تیک دیده‌شدن پیام', settings: [radio('read_receipts', 'نمایش ✓ و ✓✓ زیر پیام‌های شما', 'فقط وقتی مدیر سیستم این قابلیت را فعال کرده باشد کار می‌کند. خاموش کردن، فقط نمایش را در صفحهٔ شما پنهان می‌کند.', [['on', 'نمایش'], ['off', 'پنهان']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
@@ -2228,5 +2344,5 @@
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
   // Node unit tests only; in the browser `module` is undefined.
-  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
 })();

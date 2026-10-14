@@ -108,3 +108,12 @@ test('standalone short lines become sections; «۱. …» alone becomes ###; com
   assert.ok(out.includes('`25a2c12d`') && out.includes('`origin/dev`') && out.includes('`warehouses[]`'));
   assert.match(out, /^سلام، سه اصلاح/);
 });
+
+test('long-paste detection: 10+ lines or 1000+ characters', () => {
+  const { isLongPaste } = require('../webapp/dist/main.js');
+  assert.equal(isLongPaste('کوتاه'), false);
+  assert.equal(isLongPaste('a\n'.repeat(8)), false);
+  assert.equal(isLongPaste('a\n'.repeat(9) + 'a'), true);
+  assert.equal(isLongPaste('ب'.repeat(1000)), true);
+  assert.equal(isLongPaste(''), false);
+});
