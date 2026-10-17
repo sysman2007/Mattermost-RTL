@@ -26,6 +26,9 @@ type folderAPI struct {
 	posts        map[string]*model.Post
 	canRead      map[string]bool // "<user>|<channel>"
 	rejectAtomic int             // next N atomic writes are refused (simulated conflicts)
+	failUsers    bool            // GetUser returns a server error
+	writes       int             // successful KVSetWithOptions calls
+	permChecks   int             // HasPermissionToChannel calls
 }
 
 func newFolderAPI() *folderAPI {
@@ -74,6 +77,7 @@ func (a *folderAPI) KVSetWithOptions(key string, value []byte, opts model.Plugin
 		}
 	}
 	a.kv[key] = append([]byte(nil), value...)
+	a.writes++
 	return true, nil
 }
 
@@ -87,6 +91,9 @@ func (a *folderAPI) KVDelete(key string) *model.AppError {
 func (a *folderAPI) GetUser(id string) (*model.User, *model.AppError) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.failUsers {
+		return nil, model.NewAppError("GetUser", "db down", nil, "", http.StatusInternalServerError)
+	}
 	u, ok := a.users[id]
 	if !ok {
 		return nil, model.NewAppError("GetUser", "not found", nil, "", http.StatusNotFound)
@@ -107,6 +114,7 @@ func (a *folderAPI) GetPost(id string) (*model.Post, *model.AppError) {
 func (a *folderAPI) HasPermissionToChannel(userID, channelID string, _ *model.Permission) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.permChecks++
 	return a.canRead[userID+"|"+channelID]
 }
 
@@ -374,4 +382,104 @@ func TestBadRequests(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, f.call(t, http.MethodPost, "/api/v1/folders", body, f.alice).Code, body)
 	}
 	assert.Equal(t, http.StatusNotFound, f.call(t, http.MethodGet, "/api/v1/folders/not-an-id", "", f.alice).Code)
+}
+
+func sharedWithBob(t *testing.T, f *folderFixture) string {
+	t.Helper()
+	fid := idOf(f.create(t, f.alice, `{"kind":"shared","name":"x","member_ids":["`+f.bob+`"]}`))
+	require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/approve", "", f.bob).Code)
+	return fid
+}
+
+func storedItems(t *testing.T, f *folderFixture, fid string) []folderItem {
+	t.Helper()
+	var items []folderItem
+	if raw := f.api.kv[keyItems(fid)]; len(raw) > 0 {
+		require.NoError(t, json.Unmarshal(raw, &items))
+	}
+	return items
+}
+
+func TestUserMissingFromDatabaseDoesNotLockTheFolder(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := sharedWithBob(t, f)
+
+	delete(f.api.users, f.bob) // GetUser now returns 404, not a deactivated user
+	w := f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, []any{f.alice}, decode(t, w)["folder"].(map[string]any)["members"])
+}
+
+func TestUserLookupFailureIsAServerError(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := sharedWithBob(t, f)
+
+	f.api.failUsers = true
+	assert.Equal(t, http.StatusInternalServerError, f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice).Code,
+		"a failed lookup must not be treated as a removed member")
+	w := f.call(t, http.MethodPost, "/api/v1/folders", `{"kind":"contact","name":"x","contact_user_id":"`+f.bob+`"}`, f.alice)
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "not reported as a bad request")
+	f.api.failUsers = false
+	w = f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	assert.Len(t, decode(t, w)["folder"].(map[string]any)["members"], 2, "nobody was removed")
+}
+
+func TestDeletedPostsAreRemovedAndFreeCapacity(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := idOf(f.create(t, f.alice, `{"kind":"personal","name":"x"}`))
+	gone := model.NewId()
+	f.api.posts[gone] = &model.Post{Id: gone, ChannelId: f.chA, Message: "old"}
+	for _, id := range []string{f.post, gone} {
+		require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/items", `{"post_id":"`+id+`"}`, f.alice).Code)
+	}
+	require.Len(t, storedItems(t, f, fid), 2)
+
+	f.api.posts[gone].DeleteAt = model.GetMillis()
+	w := f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Len(t, decode(t, w)["items"], 1)
+	stored := storedItems(t, f, fid)
+	require.Len(t, stored, 1, "the deleted post no longer takes a slot")
+	assert.Equal(t, f.post, stored[0].PostID)
+
+	delete(f.api.posts, f.post) // a post missing entirely is removed too
+	f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	assert.Empty(t, storedItems(t, f, fid))
+}
+
+func TestItemsHiddenFromOneMemberAreKeptForOthers(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := sharedWithBob(t, f)
+	require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/items", `{"post_id":"`+f.other+`"}`, f.alice).Code)
+
+	w := f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.bob) // bob can't read chB
+	assert.Empty(t, decode(t, w)["items"])
+	assert.Len(t, storedItems(t, f, fid), 1, "hidden from bob, not removed")
+	w = f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	assert.Len(t, decode(t, w)["items"], 1)
+}
+
+func TestNoWriteWhenNothingChanges(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := idOf(f.create(t, f.alice, `{"kind":"personal","name":"x"}`))
+	require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/items", `{"post_id":"`+f.post+`"}`, f.alice).Code)
+
+	before := f.api.writes
+	require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/items", `{"post_id":"`+f.post+`"}`, f.alice).Code)
+	assert.Equal(t, http.StatusNotFound, f.call(t, http.MethodDelete, "/api/v1/folders/"+fid+"/items/"+model.NewId(), "", f.alice).Code)
+	assert.Equal(t, before, f.api.writes, "duplicate add and missing remove don't write")
+}
+
+func TestReadPermissionIsCheckedOncePerChannel(t *testing.T) {
+	f := newFolderFixture(t)
+	fid := idOf(f.create(t, f.alice, `{"kind":"personal","name":"x"}`))
+	for i := 0; i < 5; i++ {
+		id := model.NewId()
+		f.api.posts[id] = &model.Post{Id: id, ChannelId: f.chA, Message: "m"}
+		require.Equal(t, http.StatusOK, f.call(t, http.MethodPost, "/api/v1/folders/"+fid+"/items", `{"post_id":"`+id+`"}`, f.alice).Code)
+	}
+	f.api.permChecks = 0
+	w := f.call(t, http.MethodGet, "/api/v1/folders/"+fid, "", f.alice)
+	require.Len(t, decode(t, w)["items"], 5)
+	assert.Equal(t, 1, f.api.permChecks)
 }

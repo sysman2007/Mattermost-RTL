@@ -87,6 +87,9 @@ var (
 	errFolderLimit      = &folderError{http.StatusUnprocessableEntity, "limit_reached"}
 	errFolderBusy       = &folderError{http.StatusServiceUnavailable, "busy"}
 	errFolderStore      = &folderError{http.StatusInternalServerError, "store_failed"}
+
+	// errNoChange tells casKV that nothing needs writing; it is not an API error.
+	errNoChange = errors.New("no change")
 )
 
 func writeFolderError(w http.ResponseWriter, err error) {
@@ -131,6 +134,9 @@ func (p *Plugin) casKV(key string, mutate func(old []byte) ([]byte, error)) erro
 			return errFolderStore
 		}
 		next, err := mutate(old)
+		if errors.Is(err, errNoChange) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -264,6 +270,10 @@ func (p *Plugin) deleteFolder(f *folderMeta) error {
 // requireHuman rejects unknown, deactivated or bot users as folder members.
 func (p *Plugin) requireHuman(uid string) error {
 	u, appErr := p.API.GetUser(uid)
+	if appErr != nil && appErr.StatusCode != http.StatusNotFound {
+		p.API.LogError("folders: user lookup failed", "user_id", uid, "error", appErr.Error())
+		return errFolderStore
+	}
 	if appErr != nil || u == nil || u.DeleteAt != 0 || u.IsBot {
 		return errFolderBadRequest
 	}
@@ -321,11 +331,11 @@ func (p *Plugin) pruneDeactivated(f *folderMeta) (*folderMeta, error) {
 	var dead []string
 	for _, uid := range append(append([]string{}, f.Members...), f.Invitees...) {
 		u, appErr := p.API.GetUser(uid)
-		if appErr != nil {
+		if appErr != nil && appErr.StatusCode != http.StatusNotFound {
 			p.API.LogError("folders: user lookup failed", "user_id", uid, "error", appErr.Error())
 			return nil, errFolderStore
 		}
-		if u == nil || u.DeleteAt != 0 || u.IsBot {
+		if appErr != nil || u == nil || u.DeleteAt != 0 || u.IsBot {
 			dead = append(dead, uid)
 		}
 	}
@@ -710,20 +720,33 @@ func (p *Plugin) loadItems(fid string) ([]folderItem, error) {
 	return items, nil
 }
 
-// visibleItems returns the items uid may read right now. Posts that were
-// deleted or whose channel uid can no longer read are left out, not removed.
+// visibleItems returns the items uid may read right now. Items in channels uid
+// can't read are hidden but kept (another member may still read them). Items
+// whose post no longer exists or was deleted are removed from the folder, so
+// they don't count toward itemsPerFolder.
 func (p *Plugin) visibleItems(uid, fid string) ([]folderItemView, error) {
 	items, err := p.loadItems(fid)
 	if err != nil {
 		return nil, err
 	}
 	out := []folderItemView{}
+	canRead := map[string]bool{} // channel → permission, one lookup per channel
+	gone := map[string]bool{}
 	for _, it := range items {
 		post, appErr := p.API.GetPost(it.PostID)
+		if appErr != nil && appErr.StatusCode != http.StatusNotFound {
+			continue // transient lookup failure: hide for now, keep the item
+		}
 		if appErr != nil || post == nil || post.DeleteAt != 0 {
+			gone[it.PostID] = true
 			continue
 		}
-		if !p.API.HasPermissionToChannel(uid, post.ChannelId, model.PermissionReadChannelContent) {
+		allowed, seen := canRead[post.ChannelId]
+		if !seen {
+			allowed = p.API.HasPermissionToChannel(uid, post.ChannelId, model.PermissionReadChannelContent)
+			canRead[post.ChannelId] = allowed
+		}
+		if !allowed {
 			continue
 		}
 		out = append(out, folderItemView{
@@ -731,7 +754,35 @@ func (p *Plugin) visibleItems(uid, fid string) ([]folderItemView, error) {
 			AddedAt: it.AddedAt, Message: post.Message,
 		})
 	}
+	if len(gone) > 0 {
+		p.dropItems(fid, gone)
+	}
 	return out, nil
+}
+
+// dropItems removes the given posts from a folder's item list (best effort).
+func (p *Plugin) dropItems(fid string, gone map[string]bool) {
+	err := p.casKV(keyItems(fid), func(old []byte) ([]byte, error) {
+		var items []folderItem
+		if len(old) > 0 {
+			if err := json.Unmarshal(old, &items); err != nil {
+				return nil, errFolderStore
+			}
+		}
+		kept := make([]folderItem, 0, len(items))
+		for _, it := range items {
+			if !gone[it.PostID] {
+				kept = append(kept, it)
+			}
+		}
+		if len(kept) == len(items) {
+			return nil, errNoChange
+		}
+		return json.Marshal(kept)
+	})
+	if err != nil {
+		p.API.LogWarn("folders: could not remove deleted posts", "folder_id", fid)
+	}
 }
 
 // addItem: the caller must be an active member and must be able to read the post.
@@ -759,7 +810,7 @@ func (p *Plugin) addItem(uid, fid, postID string) error {
 		}
 		for _, it := range items {
 			if it.PostID == postID {
-				return old, nil // already in the folder
+				return nil, errNoChange // already in the folder
 			}
 		}
 		if len(items) >= itemsPerFolder {
@@ -799,10 +850,7 @@ func (p *Plugin) removeItem(uid, fid, postID string) (bool, error) {
 		}
 		removed = len(kept) != len(items)
 		if !removed {
-			return old, nil
-		}
-		if len(kept) == 0 {
-			return []byte("[]"), nil
+			return nil, errNoChange
 		}
 		b, err := json.Marshal(kept)
 		if err != nil {

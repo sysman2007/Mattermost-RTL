@@ -2224,7 +2224,9 @@
         search.hidden = hits.hidden = chips.hidden = !people;
         hint.textContent = kind.value === 'personal' ? L('فقط شما این پوشه را می‌بینید.', 'Only you will see this folder.')
           : kind.value === 'contact' ? L('فقط شما این پوشه را می‌بینید؛ مخاطب هیچ دسترسی ندارد.', 'Only you see this folder; the contact has no access.')
-          : L(`بعد از تأیید همهٔ اعضا ساخته می‌شود (${min} تا ${max} نفر).`, `Created after every member approves (${min} to ${max} people).`);
+          : min === max
+            ? L(`بعد از تأیید عضو ساخته می‌شود (${max} نفر).`, `Created after the member approves (${max} person).`)
+            : L(`بعد از تأیید همهٔ اعضا ساخته می‌شود (${min} تا ${max} نفر).`, `Created after every member approves (${min} to ${max} people).`);
         create.disabled = chosen.size < min || chosen.size > max;
       };
       kind.onchange = () => { chosen.clear(); hits.replaceChildren(); renderChips(); sync(); };
