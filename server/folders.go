@@ -701,6 +701,8 @@ func (p *Plugin) leave(uid, fid string) error {
 type folderItemView struct {
 	PostID    string `json:"post_id"`
 	ChannelID string `json:"channel_id"`
+	UserID    string `json:"user_id"`   // author of the post
+	CreateAt  int64  `json:"create_at"` // when the post was sent
 	AddedBy   string `json:"added_by"`
 	AddedAt   int64  `json:"added_at"`
 	Message   string `json:"message"`
@@ -750,8 +752,8 @@ func (p *Plugin) visibleItems(uid, fid string) ([]folderItemView, error) {
 			continue
 		}
 		out = append(out, folderItemView{
-			PostID: it.PostID, ChannelID: post.ChannelId, AddedBy: it.AddedBy,
-			AddedAt: it.AddedAt, Message: post.Message,
+			PostID: it.PostID, ChannelID: post.ChannelId, UserID: post.UserId, CreateAt: post.CreateAt,
+			AddedBy: it.AddedBy, AddedAt: it.AddedAt, Message: post.Message,
 		})
 	}
 	if len(gone) > 0 {

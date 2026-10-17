@@ -219,6 +219,7 @@ func TestPersonalFolderLifecycle(t *testing.T) {
 	items := decode(t, w)["items"].([]any)
 	require.Len(t, items, 1)
 	assert.Equal(t, "SELECT 1;", items[0].(map[string]any)["message"])
+	assert.Equal(t, f.alice, items[0].(map[string]any)["user_id"], "author of the post")
 
 	require.Equal(t, http.StatusOK, f.call(t, http.MethodDelete, "/api/v1/folders/"+fid+"/items/"+f.post, "", f.alice).Code)
 	assert.Equal(t, http.StatusNotFound, f.call(t, http.MethodDelete, "/api/v1/folders/"+fid+"/items/"+f.post, "", f.alice).Code)
