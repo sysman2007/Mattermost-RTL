@@ -1992,9 +1992,14 @@
     const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/folders`;
     const V4 = path => `${basePath}/api/v4${path}`;
     const names = new Map(); // user id → display name, filled from /users/ids
+    const listeners = new Set(); // called after any change (sidebar refresh)
     let overlay = null;
     let box = null;
     let postId = null;
+    let rhs = null;     // { showRHSPlugin, hideRHSPlugin } when the right-hand panel is registered
+    let host = null;    // the panel's element while it is open
+    let pending = null; // view to render once the panel mounts
+    let scope = null;   // { label, match(folder) } when opened from a conversation header
 
     class FolderApiError extends Error {
       constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -2014,7 +2019,11 @@
       if (!res.ok) throw new FolderApiError(res.status, data.error || 'store_failed');
       return data;
     }
-    const call = (method, path = '', body) => request(`${API()}${path}`, method, body);
+    const call = async (method, path = '', body) => {
+      const data = await request(`${API()}${path}`, method, body);
+      if (method !== 'GET') for (const fn of listeners) { try { fn(); } catch (e) { /* ignore */ } }
+      return data;
+    };
 
     const state = () => store.getState().entities;
 
@@ -2081,30 +2090,37 @@
       const st = document.createElement('style');
       st.id = 'mmrtl-folders-style';
       st.textContent = `
-        #mmrtl-folders { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
-        #mmrtl-folders .box { width: min(560px, 94vw); max-height: 86vh; overflow: auto; padding: 18px 20px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
-        #mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-        #mmrtl-folders .top h3 { flex: 1 1 auto; margin: 0; font-size: 17px; }
-        #mmrtl-folders h4 { margin: 16px 0 6px; font-size: 14px; opacity: .85; }
-        #mmrtl-folders .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .1); }
-        #mmrtl-folders .grow { flex: 1 1 auto; min-width: 0; }
-        #mmrtl-folders .meta { font-size: 12px; opacity: .7; }
-        #mmrtl-folders .msg { padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: rgba(var(--center-channel-color-rgb), .05); white-space: pre-wrap; word-break: break-word; }
-        #mmrtl-folders button { padding: 4px 12px; border: 1px solid rgba(var(--center-channel-color-rgb), .2); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
-        #mmrtl-folders button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
-        #mmrtl-folders button:disabled { opacity: .5; cursor: default; }
-        #mmrtl-folders input, #mmrtl-folders select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(var(--center-channel-color-rgb), .25); background: var(--center-channel-bg); color: inherit; }
-        #mmrtl-folders .stack { display: flex; flex-direction: column; gap: 8px; }
-        #mmrtl-folders .hits button { display: block; width: 100%; text-align: start; margin-top: 4px; }
-        #mmrtl-folders .chip { display: inline-flex; align-items: center; gap: 4px; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 12px; background: rgba(var(--center-channel-color-rgb), .08); }
-        #mmrtl-folders .notice { font-size: 13px; padding: 6px 8px; margin: 6px 0; border-radius: 6px; background: rgba(var(--center-channel-color-rgb), .06); }
-        #mmrtl-folders .err { color: var(--error-text, #d24b4e); font-size: 13px; margin-top: 6px; }`;
+        .mmrtl-folders.overlay { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+        .mmrtl-folders .box { overflow: auto; padding: 18px 20px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); }
+        .mmrtl-folders.overlay .box { width: min(560px, 94vw); max-height: 86vh; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+        .mmrtl-folders.rhs { height: 100%; overflow: auto; }
+        .mmrtl-folders.rhs .box { padding: 12px 16px; border-radius: 0; }
+        .mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .mmrtl-folders .top h3 { flex: 1 1 auto; margin: 0; font-size: 17px; }
+        .mmrtl-folders h4 { margin: 16px 0 6px; font-size: 14px; opacity: .85; }
+        .mmrtl-folders .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .1); }
+        .mmrtl-folders .grow { flex: 1 1 auto; min-width: 0; }
+        .mmrtl-folders .meta { font-size: 12px; opacity: .7; }
+        .mmrtl-folders .msg { padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: rgba(var(--center-channel-color-rgb), .05); white-space: pre-wrap; word-break: break-word; }
+        .mmrtl-folders button { padding: 4px 12px; border: 1px solid rgba(var(--center-channel-color-rgb), .2); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+        .mmrtl-folders button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
+        .mmrtl-folders button:disabled { opacity: .5; cursor: default; }
+        .mmrtl-folders input, .mmrtl-folders select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(var(--center-channel-color-rgb), .25); background: var(--center-channel-bg); color: inherit; }
+        .mmrtl-folders .stack { display: flex; flex-direction: column; gap: 8px; }
+        .mmrtl-folders .hits button { display: block; width: 100%; text-align: start; margin-top: 4px; }
+        .mmrtl-folders .chip { display: inline-flex; align-items: center; gap: 4px; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 12px; background: rgba(var(--center-channel-color-rgb), .08); }
+        .mmrtl-folders .notice { font-size: 13px; padding: 6px 8px; margin: 6px 0; border-radius: 6px; background: rgba(var(--center-channel-color-rgb), .06); }
+        .mmrtl-folders .err { color: var(--error-text, #d24b4e); font-size: 13px; margin-top: 6px; }`;
       (document.head || document.documentElement).appendChild(st);
     }
 
     function onKey(e) { if (e.key === 'Escape' && overlay) { e.stopPropagation(); close(); } }
 
     function close() {
+      if (host && rhs) {
+        store.dispatch(rhs.hideRHSPlugin);
+        return;
+      }
       document.removeEventListener('keydown', onKey, true);
       overlay?.remove();
       overlay = null;
@@ -2118,10 +2134,15 @@
       box.dir = isFa() ? 'rtl' : 'ltr';
       const top = el('div', { className: 'top' });
       if (back) top.append(el('button', { type: 'button', onclick: back }, L('بازگشت', 'Back')));
-      top.append(el('h3', {}, title), el('button', { type: 'button', onclick: close }, '✕'));
+      top.append(el('h3', {}, title));
+      if (!host) top.append(el('button', { type: 'button', onclick: close }, '✕')); // the panel has its own close button
       box.append(top);
+      if (host) {
+        host.replaceChildren(box);
+        return box;
+      }
       if (!overlay) {
-        overlay = el('div', { id: 'mmrtl-folders' });
+        overlay = el('div', { id: 'mmrtl-folders', className: 'mmrtl-folders overlay' });
         overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
         document.body.append(overlay);
         document.addEventListener('keydown', onKey, true);
@@ -2130,10 +2151,67 @@
       return box;
     }
 
-    function open(id) {
+    // Renders a view in the right-hand panel (opening it), or in the overlay.
+    function show(view) {
       injectCSS();
+      if (rhs && store) {
+        if (host) view(); else pending = view;
+        store.dispatch(rhs.showRHSPlugin);
+        return;
+      }
+      view();
+    }
+
+    // The panel component calls these when it mounts / unmounts.
+    function attach(el) {
+      injectCSS();
+      host = el;
+      const view = pending || (() => showList());
+      pending = null;
+      view();
+    }
+    function detach(el) { if (host === el) host = null; }
+
+    // From a message menu: postId is the message to add.
+    function open(id) {
       postId = id || null;
-      showList();
+      scope = null;
+      show(() => showList());
+    }
+
+    function openFolder(id) {
+      postId = null;
+      show(() => showFolder(id));
+    }
+
+    // From a conversation header: only the folders that belong to it.
+    // DM → folders with that person; group message → folders with exactly its members.
+    async function openForChannel(channel) {
+      postId = null;
+      scope = null;
+      const me = state().users.currentUserId;
+      if (channel?.type === 'D') {
+        const other = String(channel.name || '').split('__').find(id => id !== me) || me;
+        if (other === me) {
+          scope = { label: L('شما', 'You'), match: f => f.kind === 'personal' };
+        } else {
+          await loadNames([other]);
+          scope = { label: nameOf(other), match: f => f.contact === other || [...f.members, ...(f.invitees || [])].includes(other) };
+        }
+      } else if (channel?.type === 'G') {
+        try {
+          const res = await fetch(V4(`/channels/${encodeURIComponent(channel.id)}/members?per_page=200`), {
+            credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' }
+          });
+          const ids = res.ok ? (await res.json()).map(m => m.user_id) : [];
+          if (ids.length) {
+            const want = [...new Set(ids)].sort().join(',');
+            const key = f => [...new Set([...f.members, ...(f.invitees || [])])].sort().join(',');
+            scope = { label: channel.display_name || L('گروه', 'Group'), match: f => (f.kind === 'group' || f.kind === 'shared') && key(f) === want };
+          }
+        } catch (e) { /* no scope: show every folder */ }
+      }
+      show(() => showList());
     }
 
     // Lists folders; notice and error are shown at the top after a change.
@@ -2150,6 +2228,12 @@
       }
       await loadNames(folders.flatMap(f => [f.owner, ...f.members, ...(f.invitees || [])]));
       const K = kindLabels();
+      if (scope) {
+        const all = el('button', { type: 'button' }, L('همهٔ پوشه‌ها', 'All folders'));
+        all.onclick = () => { scope = null; showList(); };
+        b.append(el('div', { className: 'row' }, el('div', { className: 'grow meta' }, L(`پوشه‌های مربوط به ${scope.label}`, `Folders with ${scope.label}`)), all));
+        folders = folders.filter(scope.match);
+      }
       const invites = folders.filter(f => f.role === 'invitee');
       const mine = folders.filter(f => f.role !== 'invitee');
 
@@ -2375,7 +2459,133 @@
       if (footer.children.length) b.append(footer);
     }
 
-    return { open, close };
+    return {
+      open, openFolder, openForChannel, close, attach, detach,
+      setRhs: r => { rhs = r; },
+      list: () => call('GET'),
+      onChange: fn => listeners.add(fn),
+      loadNames, nameOf, kindLabels
+    };
+  })();
+
+  // ── «پوشه‌ها» section at the top of the left sidebar. Lists the user's
+  // folders grouped by kind; a click opens the folder in the right-hand panel.
+  const FolderSidebar = (() => {
+    const KEY = 'mmrtl-folders-collapsed';
+    const roots = new Set();
+    let folders = null; // null = feature off or unreachable: render nothing
+    let timer = 0;
+
+    const collapsed = () => { try { return localStorage.getItem(KEY) === '1'; } catch (e) { return false; } };
+    const setCollapsed = v => { try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) { /* not persisted */ } };
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-fsb-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-fsb-style';
+      st.textContent = `
+        .mmrtl-fsb { padding: 2px 8px 6px; color: var(--sidebar-text); font-size: 13px; }
+        .mmrtl-fsb button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border-radius: 4px; cursor: pointer; color: inherit; }
+        .mmrtl-fsb button:hover, .mmrtl-fsb button:focus-visible { background: rgba(var(--sidebar-text-rgb), .08); }
+        .mmrtl-fsb .head { font-weight: 600; }
+        .mmrtl-fsb .sub { padding: 6px 8px 2px; font-size: 11px; opacity: .6; }
+        .mmrtl-fsb .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-fsb .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .6; }
+        .mmrtl-fsb .badge { margin-inline-start: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--mention-bg); color: var(--mention-color); font-size: 11px; text-align: center; }
+        .mmrtl-fsb .muted { opacity: .7; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    function el(tag, props = {}, ...kids) {
+      const n = document.createElement(tag);
+      Object.assign(n, props);
+      for (const k of kids) if (k != null) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+      return n;
+    }
+
+    // The other person (contact or shared folder), for the small label.
+    function who(f, me) {
+      if (f.kind === 'contact') return Folders.nameOf(f.contact);
+      if (f.kind === 'shared') {
+        const other = [...f.members, ...(f.invitees || [])].find(id => id !== me);
+        return other ? Folders.nameOf(other) : '';
+      }
+      if (f.kind === 'group') return `${f.members.length + (f.invitees || []).length} ${L('نفر', 'people')}`;
+      return '';
+    }
+
+    function paint(root) {
+      if (!folders) { root.replaceChildren(); return; }
+      const me = store.getState().entities.users.currentUserId;
+      const invites = folders.filter(f => f.role === 'invitee');
+      const mine = folders.filter(f => f.role !== 'invitee');
+      const closed = collapsed();
+      const head = el('button', { type: 'button', className: 'head', title: L('پوشه‌های پیام', 'Message folders') },
+        el('span', {}, closed ? '▸' : '▾'), el('span', { className: 'name' }, `📁 ${L('پوشه‌ها', 'Folders')}`),
+        invites.length ? el('span', { className: 'badge', title: L('دعوت‌های در انتظار', 'Pending invitations') }, String(invites.length)) : null);
+      head.setAttribute('aria-expanded', String(!closed));
+      head.onclick = () => { setCollapsed(!closed); render(); };
+      const kids = [head];
+      if (!closed) {
+        if (invites.length) {
+          const b = el('button', { type: 'button', className: 'muted' }, el('span', { className: 'name' }, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
+          b.onclick = () => Folders.open();
+          kids.push(b);
+        }
+        const groups = [
+          [L('شخصی', 'Personal'), mine.filter(f => f.kind === 'personal')],
+          [L('با افراد', 'With people'), mine.filter(f => f.kind === 'contact' || f.kind === 'shared')],
+          [L('گروهی', 'Group'), mine.filter(f => f.kind === 'group')]
+        ];
+        for (const [label, list] of groups) {
+          if (!list.length) continue;
+          kids.push(el('div', { className: 'sub' }, label));
+          for (const f of list) {
+            const pending = f.status !== 'active' ? ' ⏳' : '';
+            const b = el('button', { type: 'button', title: f.name }, el('span', { className: 'name' }, `${f.name}${pending}`), el('span', { className: 'who' }, who(f, me)));
+            b.onclick = () => Folders.openFolder(f.id);
+            kids.push(b);
+          }
+        }
+        const add = el('button', { type: 'button', className: 'muted' }, el('span', { className: 'name' }, `+ ${L('پوشهٔ جدید', 'New folder')}`));
+        add.onclick = () => Folders.open();
+        kids.push(add);
+      }
+      root.dir = isFa() ? 'rtl' : 'ltr';
+      root.replaceChildren(...kids);
+    }
+
+    function render() { for (const r of roots) paint(r); }
+
+    async function refresh() {
+      try {
+        const data = await Folders.list();
+        const me = store.getState().entities.users.currentUserId;
+        await Folders.loadNames(data.folders.flatMap(f => [f.contact, ...f.members, ...(f.invitees || [])]).filter(id => id && id !== me));
+        folders = data.folders;
+      } catch (e) {
+        folders = null;
+      }
+      render();
+    }
+
+    function mount(el) {
+      injectCSS();
+      roots.add(el);
+      paint(el);
+      if (!timer) {
+        refresh();
+        timer = setInterval(refresh, 60000);
+      }
+    }
+
+    function unmount(el) {
+      roots.delete(el);
+      if (!roots.size) { clearInterval(timer); timer = 0; }
+    }
+
+    Folders.onChange(() => refresh());
+    return { mount, unmount };
   })();
 
   const ReadReceipts = (() => {
@@ -2883,6 +3093,45 @@
           return Boolean(post) && !(post.type || '').startsWith('system_');
         }
       );
+      // Folders open in the right-hand panel when the API exists, else in an overlay.
+      if (React && typeof registry.registerRightHandSidebarComponent === 'function') {
+        const FoldersPanel = () => {
+          const ref = React.useRef(null);
+          React.useEffect(() => {
+            const el = ref.current;
+            Folders.attach(el);
+            return () => Folders.detach(el);
+          }, []);
+          return React.createElement('div', { ref, className: 'mmrtl-folders rhs' });
+        };
+        Folders.setRhs(registry.registerRightHandSidebarComponent(FoldersPanel, L('پوشه‌ها', 'Folders')));
+      }
+      // The sidebar section and the header button appear only when the admin has
+      // turned folders on (the list call fails with "disabled" otherwise).
+      Folders.list().then(() => {
+        if (React && typeof registry.registerLeftSidebarHeaderComponent === 'function') {
+          const FolderSection = () => {
+            const ref = React.useRef(null);
+            React.useEffect(() => {
+              const el = ref.current;
+              FolderSidebar.mount(el);
+              return () => FolderSidebar.unmount(el);
+            }, []);
+            return React.createElement('div', { ref, className: 'mmrtl-fsb' });
+          };
+          registry.registerLeftSidebarHeaderComponent(FolderSection);
+        }
+        if (React && typeof registry.registerChannelHeaderButtonAction === 'function') {
+          const icon = React.createElement('svg', { width: 18, height: 18, viewBox: '0 0 24 24', 'aria-hidden': true },
+            React.createElement('path', { fill: 'currentColor', d: 'M10 4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6z' }));
+          registry.registerChannelHeaderButtonAction(
+            icon,
+            channel => Folders.openForChannel(channel),
+            L('پوشه‌ها', 'Folders'),
+            L('پوشه‌های این گفتگو', 'Folders for this conversation')
+          );
+        }
+      }).catch(() => { /* folders off or unreachable: menu entry only */ });
       const FoldersLabel = () => L('افزودن به پوشه…', 'Add to folder…');
       registry.registerPostDropdownMenuAction(
         React ? React.createElement(FoldersLabel) : FoldersLabel(),
