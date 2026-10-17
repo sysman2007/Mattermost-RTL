@@ -2205,11 +2205,23 @@
       bar = null;
     }
 
+    // The .md document for a long paste. Code (HTML, JSON, …) must be fenced:
+    // unfenced, Markdown treats its tags as prose and mangles the page.
+    function markdownDocument(text, tidy) {
+      const guess = detectCode(text);
+      if (guess.isCode) {
+        const body = text.replace(/\n+$/, '');
+        const fence = body.includes('```') ? '~~~~' : '```';
+        return `${fence}${guess.lang === 'text' ? '' : guess.lang}\n${body}\n${fence}\n`;
+      }
+      return tidy ? MdExport.toMarkdown(text) : (text.endsWith('\n') ? text : `${text}\n`);
+    }
+
     function attach(ta, text, tidy) {
       // Take the pasted text back out of the box (wherever it now is).
       const at = ta.value.indexOf(text);
       if (at >= 0) setValue(ta, ta.value.slice(0, at) + ta.value.slice(at + text.length));
-      const md = tidy ? MdExport.toMarkdown(text) : (text.endsWith('\n') ? text : `${text}\n`);
+      const md = markdownDocument(text, tidy);
       const file = new File([md], MdExport.fileName(MdExport.titleFrom(text)), { type: 'text/markdown' });
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -2420,7 +2432,7 @@
       }
     }
 
-    return { configure, isLong, detectCode, openFenceBefore };
+    return { configure, isLong, detectCode, openFenceBefore, markdownDocument };
   })();
 
   class Plugin {
@@ -2505,5 +2517,5 @@
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
   // Node unit tests only; in the browser `module` is undefined.
-  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, detectCode: PasteAsFile.detectCode, openFenceBefore: PasteAsFile.openFenceBefore, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, detectCode: PasteAsFile.detectCode, openFenceBefore: PasteAsFile.openFenceBefore, markdownDocument: PasteAsFile.markdownDocument, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
 })();
