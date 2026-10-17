@@ -421,9 +421,74 @@
       `<div class="code-body"><pre class="code-gutter" aria-hidden="true">${gutter}</pre><pre class="code-scroll"><code class="language-${escapeHtml(useLang)}">${escapeHtml(text)}</code></pre></div></figure>`;
   }
 
+  // ── HTML files: the page itself, with its scripts blocked ──
+  // The page is shown in a nested iframe with an empty sandbox (no scripts, no
+  // same-origin, no navigation) and a CSP that allows only images, styles and
+  // fonts. The CSP meta goes right after the doctype so it applies from the top
+  // of the document and doesn't change the parsing mode.
+  const HTML_PAGE_CSP = "default-src 'none'; img-src data: http: https:; style-src 'unsafe-inline' http: https:; font-src data: http: https:; media-src data: http: https:";
+
+  function htmlSrcdoc(text) {
+    const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_PAGE_CSP}">`;
+    const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(text);
+    return doctype ? doctype[0] + meta + text.slice(doctype[0].length) : meta + text;
+  }
+
+  function renderHtmlFile(text, name) {
+    const article = document.createElement('article');
+    article.id = 'content';
+    article.className = 'html-view';
+    const tabs = document.createElement('div');
+    tabs.className = 'html-tabs';
+    tabs.setAttribute('role', 'tablist');
+    const preview = document.createElement('div');
+    preview.className = 'html-panel';
+    const source = document.createElement('div');
+    source.className = 'html-panel';
+    source.hidden = true;
+
+    const frame = document.createElement('iframe');
+    frame.className = 'html-preview-frame';
+    frame.setAttribute('sandbox', '');
+    frame.setAttribute('title', name || 'HTML');
+    frame.referrerPolicy = 'no-referrer';
+    frame.srcdoc = htmlSrcdoc(text);
+    preview.appendChild(frame);
+    source.innerHTML = renderCode(text, 'markup', name);
+
+    const tab = (label, panel) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'html-tab';
+      b.setAttribute('role', 'tab');
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        for (const [btn, p] of pairs) {
+          const on = btn === b;
+          btn.setAttribute('aria-selected', String(on));
+          btn.classList.toggle('active', on);
+          p.hidden = !on;
+        }
+      });
+      return b;
+    };
+    const pairs = [[tab('پیش‌نمایش HTML', preview), preview], [tab('کد', source), source]];
+    pairs[0][0].setAttribute('aria-selected', 'true');
+    pairs[0][0].classList.add('active');
+    pairs[1][0].setAttribute('aria-selected', 'false');
+    tabs.append(pairs[0][0], pairs[1][0]);
+
+    article.append(tabs, preview, source);
+    document.body.textContent = '';
+    document.body.appendChild(article);
+    highlightCode(source);
+    wireLinks(article);
+  }
+
   async function render({ md, kind, ext, lang, name, theme, font }) {
     document.body.dataset.theme = theme === 'dark' ? 'dark' : 'light';
     await loadFont(font);
+    if (kind === 'html') return renderHtmlFile(String(md || ''), name);
     if (kind === 'csv' || kind === 'json' || kind === 'code') {
       const article = document.createElement('article');
       article.id = 'content';
@@ -497,5 +562,5 @@
     window.parent.postMessage({ type: 'mmrtl-md-ready' }, '*');
   }
 
-  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc, detectDelimiter, parseCsv, renderCsv, renderJson, renderCode };
+  if (typeof module === 'object' && module.exports) module.exports = { parse, inline, sanitizeHtmlLine, safeHref, safeImgSrc, detectDelimiter, parseCsv, renderCsv, renderJson, renderCode, htmlSrcdoc };
 })();

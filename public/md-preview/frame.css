@@ -68,3 +68,10 @@ article.data-view { max-width: none; padding: 16px; }
 .data-table .rownum { color: var(--muted); text-align: right; background: var(--surface2); user-select: none; font-variant-numeric: tabular-nums; }
 .data-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .data-json .code-card { margin: 0; }
+.html-view { max-width: none; padding: 12px 16px; }
+.html-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.html-tab { border: 1px solid var(--border, #303a49); background: transparent; color: inherit; border-radius: 6px; padding: 4px 12px; font: inherit; cursor: pointer; }
+.html-tab.active { background: var(--button-bg, #2389d7); color: var(--button-color, #fff); border-color: transparent; }
+.html-panel[hidden] { display: none; }
+/* Pages are designed for a white canvas, so the preview keeps one even in dark mode. */
+.html-preview-frame { display: block; width: 100%; height: calc(100vh - 200px); min-height: 360px; border: 1px solid #303a49; border-radius: 8px; background: #fff; }
