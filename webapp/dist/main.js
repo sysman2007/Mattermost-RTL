@@ -1985,6 +1985,399 @@
   // posts in the current channel. Server side decides who may see what: the
   // admin turns it on, every user gets a one-time notice first, and only
   // «seen / not seen» per post comes back — never view times.
+  // ── Shared message folders («پوشه‌ها»). Talks to /api/v1/folders; the server
+  // decides everything (membership, approvals, limits). A 404 with code
+  // "disabled" means the admin hasn't turned the feature on.
+  const Folders = (() => {
+    const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/folders`;
+    const V4 = path => `${basePath}/api/v4${path}`;
+    const names = new Map(); // user id → display name, filled from /users/ids
+    let overlay = null;
+    let box = null;
+    let postId = null;
+
+    class FolderApiError extends Error {
+      constructor(status, code) { super(code); this.status = status; this.code = code; }
+    }
+
+    function csrf() {
+      const m = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+
+    async function request(url, method, body) {
+      const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+      if (method !== 'GET') headers['X-CSRF-Token'] = csrf();
+      if (body) headers['Content-Type'] = 'application/json';
+      const res = await fetch(url, { method, headers, credentials: 'include', body: body ? JSON.stringify(body) : undefined });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new FolderApiError(res.status, data.error || 'store_failed');
+      return data;
+    }
+    const call = (method, path = '', body) => request(`${API()}${path}`, method, body);
+
+    const state = () => store.getState().entities;
+
+    function displayName(u) {
+      const full = [u.first_name, u.last_name].filter(Boolean).join(' ');
+      return full ? `${full} (@${u.username})` : `@${u.username}`;
+    }
+
+    function nameOf(uid) {
+      if (uid === state().users.currentUserId) return L('شما', 'You');
+      return names.get(uid) || L('کاربر', 'User');
+    }
+
+    // Loads display names for IDs we don't know yet (other members of a folder).
+    async function loadNames(ids) {
+      const missing = [...new Set(ids.filter(Boolean))].filter(id => !names.has(id));
+      if (!missing.length) return;
+      try {
+        const res = await fetch(V4('/users/ids'), {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrf() },
+          body: JSON.stringify(missing)
+        });
+        if (!res.ok) return;
+        for (const u of await res.json()) names.set(u.id, displayName(u));
+      } catch (e) { /* names stay generic */ }
+    }
+
+    // Children are strings (text nodes) or nodes; never HTML.
+    function el(tag, props = {}, ...kids) {
+      const n = document.createElement(tag);
+      Object.assign(n, props);
+      for (const k of kids) {
+        if (k == null) continue;
+        n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+      }
+      return n;
+    }
+
+    const kindLabels = () => ({
+      personal: L('شخصی', 'Personal'), contact: L('مخاطب', 'Contact'),
+      shared: L('اشتراکی', 'Shared'), group: L('گروهی', 'Group')
+    });
+    const errorLabels = () => ({
+      disabled: L('این قابلیت توسط مدیر سیستم فعال نشده است.', 'This feature is not enabled by your administrator.'),
+      not_found: L('پوشه یا پیام پیدا نشد.', 'Not found.'),
+      invalid_state: L('این کار در وضعیت فعلی پوشه ممکن نیست.', 'Not possible in the folder’s current state.'),
+      forbidden: L('اجازهٔ این کار را ندارید.', 'You are not allowed to do this.'),
+      limit_reached: L('به سقف مجاز رسیده‌اید.', 'A limit has been reached.'),
+      busy: L('سرور مشغول است؛ دوباره تلاش کنید.', 'The server is busy; try again.'),
+      bad_request: L('اطلاعات وارد‌شده معتبر نیست.', 'The input is not valid.'),
+      store_failed: L('خطا در ذخیرهٔ اطلاعات.', 'Could not save.')
+    });
+
+    function errorNode(err) {
+      const text = err instanceof FolderApiError
+        ? (errorLabels()[err.code] || errorLabels().store_failed)
+        : L('خطای شبکه.', 'Network error.');
+      return el('div', { className: 'err', role: 'alert' }, text);
+    }
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-folders-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-folders-style';
+      st.textContent = `
+        #mmrtl-folders { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+        #mmrtl-folders .box { width: min(560px, 94vw); max-height: 86vh; overflow: auto; padding: 18px 20px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+        #mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        #mmrtl-folders .top h3 { flex: 1 1 auto; margin: 0; font-size: 17px; }
+        #mmrtl-folders h4 { margin: 16px 0 6px; font-size: 14px; opacity: .85; }
+        #mmrtl-folders .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .1); }
+        #mmrtl-folders .grow { flex: 1 1 auto; min-width: 0; }
+        #mmrtl-folders .meta { font-size: 12px; opacity: .7; }
+        #mmrtl-folders .msg { padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: rgba(var(--center-channel-color-rgb), .05); white-space: pre-wrap; word-break: break-word; }
+        #mmrtl-folders button { padding: 4px 12px; border: 1px solid rgba(var(--center-channel-color-rgb), .2); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+        #mmrtl-folders button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
+        #mmrtl-folders button:disabled { opacity: .5; cursor: default; }
+        #mmrtl-folders input, #mmrtl-folders select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(var(--center-channel-color-rgb), .25); background: var(--center-channel-bg); color: inherit; }
+        #mmrtl-folders .stack { display: flex; flex-direction: column; gap: 8px; }
+        #mmrtl-folders .hits button { display: block; width: 100%; text-align: start; margin-top: 4px; }
+        #mmrtl-folders .chip { display: inline-flex; align-items: center; gap: 4px; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 12px; background: rgba(var(--center-channel-color-rgb), .08); }
+        #mmrtl-folders .notice { font-size: 13px; padding: 6px 8px; margin: 6px 0; border-radius: 6px; background: rgba(var(--center-channel-color-rgb), .06); }
+        #mmrtl-folders .err { color: var(--error-text, #d24b4e); font-size: 13px; margin-top: 6px; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    function onKey(e) { if (e.key === 'Escape' && overlay) { e.stopPropagation(); close(); } }
+
+    function close() {
+      document.removeEventListener('keydown', onKey, true);
+      overlay?.remove();
+      overlay = null;
+      box = null;
+    }
+
+    // Starts a new dialog; back (optional) adds a back button.
+    function dialog(title, back) {
+      box = el('div', { className: 'box', role: 'dialog' });
+      box.setAttribute('aria-modal', 'true');
+      box.dir = isFa() ? 'rtl' : 'ltr';
+      const top = el('div', { className: 'top' });
+      if (back) top.append(el('button', { type: 'button', onclick: back }, L('بازگشت', 'Back')));
+      top.append(el('h3', {}, title), el('button', { type: 'button', onclick: close }, '✕'));
+      box.append(top);
+      if (!overlay) {
+        overlay = el('div', { id: 'mmrtl-folders' });
+        overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
+        document.body.append(overlay);
+        document.addEventListener('keydown', onKey, true);
+      }
+      overlay.replaceChildren(box);
+      return box;
+    }
+
+    function open(id) {
+      injectCSS();
+      postId = id || null;
+      showList();
+    }
+
+    // Lists folders; notice and error are shown at the top after a change.
+    async function showList(notice, error) {
+      const b = dialog(L('پوشه‌ها', 'Folders'));
+      if (notice) b.append(el('div', { className: 'notice' }, notice));
+      if (error) b.append(errorNode(error));
+      let folders;
+      try {
+        ({ folders } = await call('GET'));
+      } catch (e) {
+        b.append(e.code === 'disabled' ? el('div', { className: 'notice' }, errorLabels().disabled) : errorNode(e));
+        return;
+      }
+      await loadNames(folders.flatMap(f => [f.owner, ...f.members, ...(f.invitees || [])]));
+      const K = kindLabels();
+      const invites = folders.filter(f => f.role === 'invitee');
+      const mine = folders.filter(f => f.role !== 'invitee');
+
+      if (invites.length) {
+        b.append(el('h4', {}, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
+        for (const f of invites) {
+          const row = el('div', { className: 'row' });
+          row.append(el('div', { className: 'grow' }, f.name), el('span', { className: 'meta' }, `${K[f.kind]} · ${nameOf(f.owner)}`));
+          const ok = el('button', { type: 'button', className: 'primary' }, L('پذیرش', 'Accept'));
+          const no = el('button', { type: 'button' }, L('رد', 'Decline'));
+          ok.onclick = () => runThenList(() => call('POST', `/${f.id}/approve`), L('پوشه پذیرفته شد.', 'Folder accepted.'));
+          no.onclick = () => runThenList(() => call('POST', `/${f.id}/reject`), L('دعوت رد شد.', 'Invitation declined.'));
+          row.append(ok, no);
+          b.append(row);
+        }
+      }
+
+      b.append(el('h4', {}, L('پوشه‌های من', 'My folders')));
+      if (!mine.length) b.append(el('div', { className: 'meta' }, L('هنوز پوشه‌ای ندارید.', 'You have no folders yet.')));
+      for (const f of mine) {
+        const row = el('div', { className: 'row' });
+        const status = f.status === 'pending' ? L(' · در انتظار تأیید', ' · waiting for approval')
+          : f.status === 'deleting' ? L(' · حذف در انتظار تأیید', ' · deletion waiting for approval') : '';
+        const count = f.members.length + (f.invitees || []).length;
+        row.append(
+          el('div', { className: 'grow' }, f.name),
+          el('span', { className: 'meta' }, `${K[f.kind]} · ${count} ${L('نفر', 'people')}${status}`)
+        );
+        const open = el('button', { type: 'button' }, L('باز کردن', 'Open'));
+        open.onclick = () => showFolder(f.id);
+        row.append(open);
+        b.append(row);
+      }
+      b.append(createForm());
+    }
+
+    // Runs a change, then re-renders the list (showing the error if it failed).
+    async function runThenList(fn, okText) {
+      try {
+        await fn();
+        await showList(okText);
+      } catch (e) {
+        await showList(undefined, e);
+      }
+    }
+
+    function createForm() {
+      const K = kindLabels();
+      const wrap = el('div', { className: 'stack' });
+      wrap.append(el('h4', {}, L('پوشهٔ جدید', 'New folder')));
+      const name = el('input', { type: 'text', maxLength: 60, placeholder: L('نام پوشه', 'Folder name') });
+      const kind = el('select', {});
+      for (const k of ['personal', 'contact', 'shared', 'group']) kind.append(el('option', { value: k }, K[k]));
+      const hint = el('div', { className: 'meta' });
+      const search = el('input', { type: 'text', placeholder: L('جستجوی کاربر…', 'Search people…') });
+      const hits = el('div', { className: 'hits' });
+      const chips = el('div', {});
+      const chosen = new Set();
+      const create = el('button', { type: 'button', className: 'primary' }, L('ایجاد', 'Create'));
+      const limits = () => ({ personal: [0, 0], contact: [1, 1], shared: [1, 1], group: [2, 7] })[kind.value];
+
+      const renderChips = () => {
+        chips.replaceChildren(...[...chosen].map(id => {
+          const c = el('span', { className: 'chip' }, nameOf(id));
+          c.append(el('button', { type: 'button', onclick: () => { chosen.delete(id); renderChips(); sync(); } }, '✕'));
+          return c;
+        }));
+      };
+      const sync = () => {
+        const [min, max] = limits();
+        const people = max > 0;
+        search.hidden = hits.hidden = chips.hidden = !people;
+        hint.textContent = kind.value === 'personal' ? L('فقط شما این پوشه را می‌بینید.', 'Only you will see this folder.')
+          : kind.value === 'contact' ? L('فقط شما این پوشه را می‌بینید؛ مخاطب هیچ دسترسی ندارد.', 'Only you see this folder; the contact has no access.')
+          : min === max
+            ? L(`بعد از تأیید عضو ساخته می‌شود (${max} نفر).`, `Created after the member approves (${max} person).`)
+            : L(`بعد از تأیید همهٔ اعضا ساخته می‌شود (${min} تا ${max} نفر).`, `Created after every member approves (${min} to ${max} people).`);
+        create.disabled = chosen.size < min || chosen.size > max;
+      };
+      kind.onchange = () => { chosen.clear(); hits.replaceChildren(); renderChips(); sync(); };
+
+      let timer = 0;
+      search.oninput = () => {
+        clearTimeout(timer);
+        const term = search.value.trim();
+        if (!term) { hits.replaceChildren(); return; }
+        timer = setTimeout(async () => {
+          try {
+            const res = await fetch(V4('/users/search'), {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrf() },
+              body: JSON.stringify({ term, allow_inactive: false, limit: 8 })
+            });
+            const users = res.ok ? await res.json() : [];
+            const me = state().users.currentUserId;
+            hits.replaceChildren(...users.filter(u => u.id !== me && !u.is_bot).map(u => {
+              names.set(u.id, displayName(u));
+              const pick = el('button', { type: 'button' }, displayName(u));
+              pick.onclick = () => {
+                if (chosen.size >= limits()[1]) return;
+                chosen.add(u.id);
+                search.value = '';
+                hits.replaceChildren();
+                renderChips();
+                sync();
+              };
+              return pick;
+            }));
+          } catch (e) { hits.replaceChildren(); }
+        }, 250);
+      };
+
+      create.onclick = async () => {
+        const body = { kind: kind.value, name: name.value };
+        const ids = [...chosen];
+        if (kind.value === 'contact') body.contact_user_id = ids[0];
+        else if (kind.value !== 'personal') body.member_ids = ids;
+        try {
+          const f = await call('POST', '', body);
+          await showList(f.status === 'pending'
+            ? L('درخواست ساخت پوشه برای اعضا فرستاده شد.', 'The request was sent to the members.')
+            : L('پوشه ساخته شد.', 'Folder created.'));
+        } catch (e) {
+          await showList(undefined, e);
+        }
+      };
+
+      wrap.append(name, kind, hint, search, hits, chips, create);
+      sync();
+      return wrap;
+    }
+
+    // Folder detail. notice/error show after an action on this folder.
+    async function showFolder(id, notice, error) {
+      const back = () => showList();
+      let data;
+      try {
+        data = await call('GET', `/${id}`);
+      } catch (e) {
+        dialog(L('پوشه', 'Folder'), back).append(errorNode(e));
+        return;
+      }
+      const { folder: f, items } = data;
+      await loadNames([f.owner, f.delete_by, ...f.members, ...(f.invitees || []), ...items.map(i => i.added_by)]);
+      const K = kindLabels();
+      const b = dialog(f.name, back);
+      const count = f.members.length + (f.invitees || []).length;
+      b.append(el('div', { className: 'meta' }, `${K[f.kind]} · ${count} ${L('نفر', 'people')}`));
+      if (notice) b.append(el('div', { className: 'notice' }, notice));
+      if (error) b.append(errorNode(error));
+
+      // Each action re-opens this folder; a failure is shown on top.
+      const act = async (fn, okText) => {
+        try {
+          await fn();
+          await showFolder(id, okText);
+        } catch (e) {
+          await showFolder(id, undefined, e);
+        }
+      };
+
+      if (f.role === 'invitee') {
+        b.append(el('div', { className: 'notice' }, L('این پوشه منتظر پذیرش شماست. پیام‌ها بعد از پذیرش نمایش داده می‌شوند.', 'This folder is waiting for your acceptance. Messages show after you accept.')));
+        const ok = el('button', { type: 'button', className: 'primary' }, L('پذیرش', 'Accept'));
+        const no = el('button', { type: 'button' }, L('رد', 'Decline'));
+        ok.onclick = () => act(() => call('POST', `/${id}/approve`), L('پوشه پذیرفته شد.', 'Folder accepted.'));
+        no.onclick = () => runThenList(() => call('POST', `/${id}/reject`), L('دعوت رد شد.', 'Invitation declined.'));
+        b.append(el('div', { className: 'row' }, ok, no));
+        return;
+      }
+
+      if (f.status === 'deleting') {
+        b.append(el('div', { className: 'notice' }, L(`${nameOf(f.delete_by)} حذف این پوشه را خواسته است.`, `${nameOf(f.delete_by)} asked to delete this folder.`)));
+        if (!(f.delete_ok || []).includes(state().users.currentUserId)) {
+          const yes = el('button', { type: 'button', className: 'primary' }, L('تأیید حذف', 'Approve deletion'));
+          const no = el('button', { type: 'button' }, L('مخالفم', 'Reject'));
+          yes.onclick = () => act(() => call('POST', `/${id}/delete-request/approve`), L('تأیید ثبت شد.', 'Approval recorded.'));
+          no.onclick = () => act(() => call('POST', `/${id}/delete-request/reject`), L('حذف متوقف شد.', 'Deletion cancelled.'));
+          b.append(el('div', { className: 'row' }, yes, no));
+        }
+      }
+
+      const active = f.status === 'active';
+      if (postId && active && !items.some(i => i.post_id === postId)) {
+        const add = el('button', { type: 'button', className: 'primary' }, L('افزودن این پیام به این پوشه', 'Add this message to this folder'));
+        add.onclick = () => act(() => call('POST', `/${id}/items`, { post_id: postId }), L('پیام اضافه شد.', 'Message added.'));
+        b.append(el('div', { className: 'row' }, add));
+      }
+
+      b.append(el('h4', {}, L(`پیام‌ها (${items.length})`, `Messages (${items.length})`)));
+      if (!items.length) b.append(el('div', { className: 'meta' }, L('پیامی در این پوشه نیست.', 'No messages in this folder.')));
+      for (const it of items) {
+        const card = el('div', { className: 'row' });
+        card.append(el('div', { className: 'meta grow' }, `${nameOf(it.added_by)} · ${new Date(it.added_at).toLocaleString()}`));
+        card.append(el('div', { className: 'msg grow', dir: 'auto' }, it.message));
+        if (active) {
+          const rm = el('button', { type: 'button' }, L('حذف از پوشه', 'Remove from folder'));
+          rm.onclick = () => act(() => call('DELETE', `/${id}/items/${it.post_id}`), L('حذف شد.', 'Removed.'));
+          card.append(rm);
+        }
+        b.append(card);
+      }
+
+      const shared = f.kind === 'shared' || f.kind === 'group';
+      const footer = el('div', { className: 'row' });
+      if (shared && active) {
+        const leave = el('button', { type: 'button' }, L('ترک پوشه', 'Leave folder'));
+        leave.onclick = () => {
+          if (confirm(L('پوشه را ترک می‌کنید؟', 'Leave this folder?'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
+        };
+        footer.append(leave);
+      }
+      if (active || (f.status === 'pending' && f.role === 'owner')) {
+        const del = el('button', { type: 'button' }, shared ? L('درخواست حذف', 'Request deletion') : L('حذف پوشه', 'Delete folder'));
+        del.onclick = () => {
+          const msg = shared
+            ? L('حذف این پوشه نیاز به تأیید همهٔ اعضا دارد. ادامه می‌دهید؟', 'Deleting this folder needs every member to approve. Continue?')
+            : L('این پوشه برای همیشه حذف می‌شود. ادامه می‌دهید؟', 'This folder will be deleted permanently. Continue?');
+          if (confirm(msg)) runThenList(() => call('POST', `/${id}/delete-request`), L('درخواست ثبت شد.', 'Request recorded.'));
+        };
+        footer.append(del);
+      }
+      if (footer.children.length) b.append(footer);
+    }
+
+    return { open, close };
+  })();
+
   const ReadReceipts = (() => {
     const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/receipts`;
     const FAST = 15000, SLOW = 60000;
@@ -2488,6 +2881,15 @@
         postId => {
           const post = store.getState().entities.posts.posts[postId];
           return Boolean(post) && !(post.type || '').startsWith('system_');
+        }
+      );
+      const FoldersLabel = () => L('افزودن به پوشه…', 'Add to folder…');
+      registry.registerPostDropdownMenuAction(
+        React ? React.createElement(FoldersLabel) : FoldersLabel(),
+        postId => Folders.open(postId),
+        postId => {
+          const post = store.getState().entities.posts.posts[postId];
+          return Boolean(post?.message) && !(post.type || '').startsWith('system_');
         }
       );
       applySettings();

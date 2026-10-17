@@ -21,6 +21,8 @@ type configuration struct {
 
 	EnableReadReceipts bool
 	ReceiptsMaxMembers int
+
+	EnableSharedFolders bool
 }
 
 const (
