@@ -63,3 +63,23 @@ test('code file view: line numbers, escaping, unknown language falls back to tex
   assert.match(html, /class="language-text"/, 'Prism not loaded in tests → text');
   assert.match(html, /<span class="language-label">a\.py<\/span>/);
 });
+
+test('a pasted HTML page becomes a fenced .md, so the Markdown preview shows code, not prose', () => {
+  const { markdownDocument } = require('../webapp/dist/main.js');
+  const { parse } = require('../public/md-preview/frame.js');
+  const page = '<!doctype html>\n<html lang="fa" dir="rtl"><head><meta charset="utf-8"></head>\n<body><p>سلام</p></body></html>';
+  for (const tidy of [false, true]) {
+    const md = markdownDocument(page, tidy);
+    assert.match(md, /^```html\n<!doctype html>/);
+    assert.match(md, /\n```\n$/);
+    const { html } = parse(md);
+    assert.match(html, /class="language-markup"/, `tidy=${tidy}`);
+    assert.doesNotMatch(html, /<p>&lt;!doctype|<html lang/, `tidy=${tidy}: tags must not be prose`);
+  }
+});
+
+test('prose pasted as a .md keeps its Markdown conversion (no fence added)', () => {
+  const { markdownDocument } = require('../webapp/dist/main.js');
+  const prose = 'سلام، جلسه فردا ساعت ۱۰ است.\nلطفاً گزارش‌ها را بیاورید.\nباتشکر';
+  assert.doesNotMatch(markdownDocument(prose, false), /```/);
+});

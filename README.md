@@ -2,7 +2,7 @@
 
 # Mattermost RTL — پلاگین فارسی‌سازی Mattermost
 
-![version](https://img.shields.io/badge/version-2.3.1-5b6af8)
+![version](https://img.shields.io/badge/version-2.3.2-5b6af8)
 ![mattermost](https://img.shields.io/badge/Mattermost-9.0%2B%20(tested%2011.11)-0058cc)
 ![type](https://img.shields.io/badge/plugin-webapp%20%2B%20server-a855f7)
 
@@ -321,6 +321,7 @@ workflow `.github/workflows/release.yml` با push هر تگ `v*` اجرا می�
 
 | نسخه | تغییرات |
 |---|---|
+| 2.3.2 | رفع باگ: متن HTML/کدِ بلندی که به‌صورت فایل .md پیوست می‌شود اکنون داخل بلوک کد قرار می‌گیرد؛ قبلاً تگ‌ها به‌صورت متن معمولی رندر می‌شدند |
 | 2.3.1 | فایل‌های `.html` و `.htm` به‌صورت صفحهٔ رندرشده نمایش داده می‌شوند (بدون اجرای اسکریپت)؛ تب «کد» همان نمای Prism است |
 | 2.3.0 | پیش‌نمایش فایل‌های کد با Prism؛ انتخاب زبان برای کدِ چسبانده‌شده (بلوک کد با زبان، تنظیم زبان بلوک خالی، یا ارسال به‌صورت فایل) |
 | 2.2.0 | پیشنهاد ارسال متن بلندِ چسبانده‌شده به‌صورت پیوست .md (خام یا مرتب‌شده) |
