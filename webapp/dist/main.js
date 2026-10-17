@@ -2085,34 +2085,102 @@
       return el('div', { className: 'err', role: 'alert' }, text);
     }
 
-    function injectCSS() {
-      if (document.getElementById('mmrtl-folders-style')) return;
-      const st = document.createElement('style');
+    // Styles go into the document the view is rendered in: the main window, or
+    // the separate window when the user pops the right-hand panel out.
+    function injectCSS(doc = document) {
+      if (doc.getElementById('mmrtl-folders-style')) return;
+      const st = doc.createElement('style');
       st.id = 'mmrtl-folders-style';
       st.textContent = `
+        .mmrtl-folders { --mf-line: rgba(var(--center-channel-color-rgb), .12); --mf-soft: rgba(var(--center-channel-color-rgb), .05); --mf-muted: rgba(var(--center-channel-color-rgb), .64); color: var(--center-channel-color); font-size: 14px; line-height: 1.45; }
         .mmrtl-folders.overlay { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
-        .mmrtl-folders .box { overflow: auto; padding: 18px 20px; border-radius: 10px; background: var(--center-channel-bg); color: var(--center-channel-color); }
+        .mmrtl-folders .box { overflow: auto; padding: 16px 20px 20px; border-radius: 12px; background: var(--center-channel-bg); }
         .mmrtl-folders.overlay .box { width: min(560px, 94vw); max-height: 86vh; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
-        .mmrtl-folders.rhs { height: 100%; overflow: auto; }
-        .mmrtl-folders.rhs .box { padding: 12px 16px; border-radius: 0; }
-        .mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-        .mmrtl-folders .top h3 { flex: 1 1 auto; margin: 0; font-size: 17px; }
-        .mmrtl-folders h4 { margin: 16px 0 6px; font-size: 14px; opacity: .85; }
-        .mmrtl-folders .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(var(--center-channel-color-rgb), .1); }
-        .mmrtl-folders .grow { flex: 1 1 auto; min-width: 0; }
-        .mmrtl-folders .meta { font-size: 12px; opacity: .7; }
-        .mmrtl-folders .msg { padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: rgba(var(--center-channel-color-rgb), .05); white-space: pre-wrap; word-break: break-word; }
-        .mmrtl-folders button { padding: 4px 12px; border: 1px solid rgba(var(--center-channel-color-rgb), .2); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
-        .mmrtl-folders button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
-        .mmrtl-folders button:disabled { opacity: .5; cursor: default; }
-        .mmrtl-folders input, .mmrtl-folders select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(var(--center-channel-color-rgb), .25); background: var(--center-channel-bg); color: inherit; }
-        .mmrtl-folders .stack { display: flex; flex-direction: column; gap: 8px; }
-        .mmrtl-folders .hits button { display: block; width: 100%; text-align: start; margin-top: 4px; }
-        .mmrtl-folders .chip { display: inline-flex; align-items: center; gap: 4px; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 12px; background: rgba(var(--center-channel-color-rgb), .08); }
-        .mmrtl-folders .notice { font-size: 13px; padding: 6px 8px; margin: 6px 0; border-radius: 6px; background: rgba(var(--center-channel-color-rgb), .06); }
-        .mmrtl-folders .err { color: var(--error-text, #d24b4e); font-size: 13px; margin-top: 6px; }`;
-      (document.head || document.documentElement).appendChild(st);
+        .mmrtl-folders.rhs { height: 100%; overflow: auto; background: var(--center-channel-bg); }
+        .mmrtl-folders.rhs .box { padding: 12px 16px 20px; border-radius: 0; }
+        .mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .mmrtl-folders .top h3 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-folders .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid var(--mf-line); background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .mmrtl-folders .btn:hover { background: var(--mf-soft); }
+        .mmrtl-folders .btn.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
+        .mmrtl-folders .btn.primary:hover { filter: brightness(1.08); }
+        .mmrtl-folders .btn.danger { color: var(--error-text); border-color: rgba(var(--error-text-color-rgb, 210,75,78), .45); }
+        .mmrtl-folders .btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
+        .mmrtl-folders .btn.block { width: 100%; height: 40px; font-size: 14px; }
+        .mmrtl-folders .btn:disabled { opacity: .45; cursor: default; filter: none; }
+        .mmrtl-folders .icon-btn { width: 32px; padding: 0; border-color: transparent; font-size: 16px; }
+        .mmrtl-folders .section { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--mf-muted); }
+        .mmrtl-folders .list { display: flex; flex-direction: column; gap: 6px; }
+        .mmrtl-folders .folder { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid var(--mf-line); border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+        .mmrtl-folders button.folder:hover { background: var(--mf-soft); border-color: rgba(var(--button-bg-rgb), .5); }
+        .mmrtl-folders .ficon { flex: none; width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; background: rgba(var(--button-bg-rgb), .1); }
+        .mmrtl-folders .ftext { flex: 1 1 auto; min-width: 0; }
+        .mmrtl-folders .fname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-folders .fmeta { margin-top: 2px; font-size: 12px; color: var(--mf-muted); }
+        .mmrtl-folders .tag { display: inline-block; margin-inline-start: 6px; padding: 0 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: rgba(var(--away-indicator-rgb, 255,188,66), .22); }
+        .mmrtl-folders .chev { flex: none; opacity: .45; }
+        .mmrtl-folders .banner { margin: 8px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; background: rgba(var(--button-bg-rgb), .08); }
+        .mmrtl-folders .banner.warn { background: rgba(var(--away-indicator-rgb, 255,188,66), .16); }
+        .mmrtl-folders .banner.ok { background: rgba(var(--online-indicator-rgb, 6,214,160), .14); }
+        .mmrtl-folders .banner .row { display: flex; gap: 8px; margin-top: 8px; }
+        .mmrtl-folders .err { margin: 8px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; color: var(--error-text); background: rgba(var(--error-text-color-rgb, 210,75,78), .08); }
+        .mmrtl-folders .empty { padding: 24px 12px; border: 1px dashed var(--mf-line); border-radius: 8px; text-align: center; color: var(--mf-muted); }
+        .mmrtl-folders .kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+        .mmrtl-folders .kind { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; border: 1px solid var(--mf-line); border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+        .mmrtl-folders .kind:hover { background: var(--mf-soft); }
+        .mmrtl-folders .kind[aria-checked="true"] { border-color: var(--button-bg); box-shadow: inset 0 0 0 1px var(--button-bg); background: rgba(var(--button-bg-rgb), .06); }
+        .mmrtl-folders .kind .ki { font-size: 20px; }
+        .mmrtl-folders .kind .kt { font-weight: 600; }
+        .mmrtl-folders .kind .kd { font-size: 12px; color: var(--mf-muted); }
+        .mmrtl-folders .field { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+        .mmrtl-folders .field > label, .mmrtl-folders .field > .label { font-size: 13px; font-weight: 600; }
+        .mmrtl-folders .hint { font-size: 12px; color: var(--mf-muted); }
+        .mmrtl-folders .input { height: 36px; padding: 0 12px; border-radius: 4px; border: 1px solid rgba(var(--center-channel-color-rgb), .16); background: var(--center-channel-bg); color: inherit; font: inherit; }
+        .mmrtl-folders .input:focus { outline: none; border-color: var(--button-bg); box-shadow: 0 0 0 1px var(--button-bg); }
+        .mmrtl-folders .counter { align-self: flex-end; font-size: 11px; color: var(--mf-muted); }
+        .mmrtl-folders .hits { border: 1px solid var(--mf-line); border-radius: 6px; overflow: hidden; }
+        .mmrtl-folders .hits:empty { display: none; }
+        .mmrtl-folders .hit { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+        .mmrtl-folders .hit:hover, .mmrtl-folders .hit:focus-visible { background: var(--mf-soft); outline: none; }
+        .mmrtl-folders .people { display: flex; flex-wrap: wrap; gap: 6px; }
+        .mmrtl-folders .person { display: inline-flex; align-items: center; gap: 6px; padding-block: 3px; padding-inline: 4px 10px; border-radius: 14px; background: var(--mf-soft); font-size: 13px; }
+        .mmrtl-folders .person .x { border: 0; background: transparent; color: inherit; cursor: pointer; opacity: .6; padding: 0 2px; font: inherit; }
+        .mmrtl-folders .person.wait { opacity: .7; }
+        .mmrtl-folders .avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: none; background: var(--mf-soft); }
+        .mmrtl-folders .avatar.lg { width: 32px; height: 32px; }
+        .mmrtl-folders .actions { display: flex; gap: 8px; margin-top: 22px; }
+        .mmrtl-folders .msgs { display: flex; flex-direction: column; gap: 10px; }
+        .mmrtl-folders .msgcard { padding: 10px 12px; border: 1px solid var(--mf-line); border-radius: 8px; }
+        .mmrtl-folders .msghead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .mmrtl-folders .msghead .who { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-folders .msghead .where, .mmrtl-folders .msghead .when { font-size: 12px; color: var(--mf-muted); white-space: nowrap; }
+        .mmrtl-folders .msghead .grow { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+        .mmrtl-folders .msgbody { position: relative; margin-top: 8px; overflow: hidden; overflow-wrap: anywhere; }
+        .mmrtl-folders .msgbody.clamp { max-height: 220px; }
+        .mmrtl-folders .msgbody.clamp::after { content: ''; position: absolute; inset: auto 0 0 0; height: 44px; background: linear-gradient(rgba(var(--center-channel-bg-rgb), 0), var(--center-channel-bg)); }
+        .mmrtl-folders .msgbody .code { margin: 6px 0; border: 1px solid var(--mf-line); border-radius: 6px; overflow: hidden; direction: ltr; }
+        .mmrtl-folders .msgbody .code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px 3px 10px; font-size: 11px; color: var(--mf-muted); background: var(--mf-soft); }
+        .mmrtl-folders [hidden] { display: none !important; }
+        .mmrtl-folders .msgbody .code pre code { display: block; padding: 0; border: 0; background: none; color: inherit; font: inherit; white-space: inherit; }
+        .mmrtl-folders .msgbody .code pre { margin: 0; padding: 8px 10px; overflow: auto; white-space: pre; border: 0; border-radius: 0; background: transparent; font-family: Menlo, Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.55; text-align: left; unicode-bidi: isolate; }
+        .mmrtl-folders .msgbody p { margin: 0 0 6px; }
+        .mmrtl-folders .msgfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+        .mmrtl-folders .msgfoot .added { flex: 1 1 auto; font-size: 11px; color: var(--mf-muted); }
+        .mmrtl-folders .more { border: 0; background: transparent; padding: 4px 0 0; color: var(--link-color); cursor: pointer; font: inherit; font-size: 12px; }
+        .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`;
+      (doc.head || doc.documentElement).appendChild(st);
     }
+
+    const KIND_ICON = { personal: '📁', contact: '👤', shared: '👥', group: '👪' };
+    const kindDescriptions = () => ({
+      personal: L('فقط خودتان می‌بینید', 'Only you can see it'),
+      contact: L('فقط خودتان؛ مرتبط با یک نفر', 'Only you; about one person'),
+      shared: L('شما و یک نفر دیگر، با تأیید او', 'You and one other person, after they accept'),
+      group: L('تا ۸ نفر، با تأیید همهٔ اعضا', 'Up to 8 people, after everyone accepts')
+    });
+
+    const avatar = (uid, cls = 'avatar') => el('img', { className: cls, src: V4(`/users/${encodeURIComponent(uid)}/image`), alt: '', loading: 'lazy' });
+    const confirmIn = msg => ((host && host.ownerDocument.defaultView) || window).confirm(msg);
 
     function onKey(e) { if (e.key === 'Escape' && overlay) { e.stopPropagation(); close(); } }
 
@@ -2127,15 +2195,19 @@
       box = null;
     }
 
-    // Starts a new dialog; back (optional) adds a back button.
+    // Starts a new view; back (optional) adds a back button.
     function dialog(title, back) {
       box = el('div', { className: 'box', role: 'dialog' });
       box.setAttribute('aria-modal', 'true');
       box.dir = isFa() ? 'rtl' : 'ltr';
       const top = el('div', { className: 'top' });
-      if (back) top.append(el('button', { type: 'button', onclick: back }, L('بازگشت', 'Back')));
+      if (back) {
+        const b = el('button', { type: 'button', className: 'btn icon-btn', title: L('بازگشت', 'Back'), onclick: back }, isFa() ? '→' : '←');
+        b.setAttribute('aria-label', L('بازگشت', 'Back'));
+        top.append(b);
+      }
       top.append(el('h3', {}, title));
-      if (!host) top.append(el('button', { type: 'button', onclick: close }, '✕')); // the panel has its own close button
+      if (!host) top.append(el('button', { type: 'button', className: 'btn icon-btn', title: L('بستن', 'Close'), onclick: close }, '✕'));
       box.append(top);
       if (host) {
         host.replaceChildren(box);
@@ -2163,14 +2235,14 @@
     }
 
     // The panel component calls these when it mounts / unmounts.
-    function attach(el) {
-      injectCSS();
-      host = el;
+    function attach(node) {
+      injectCSS(node.ownerDocument);
+      host = node;
       const view = pending || (() => showList());
       pending = null;
       view();
     }
-    function detach(el) { if (host === el) host = null; }
+    function detach(node) { if (host === node) host = null; }
 
     // From a message menu: postId is the message to add.
     function open(id) {
@@ -2184,7 +2256,13 @@
       show(() => showFolder(id));
     }
 
-    // From a conversation header: only the folders that belong to it.
+    function openCreate() {
+      postId = null;
+      scope = null;
+      show(() => showCreate());
+    }
+
+    // From a conversation button: only the folders that belong to it.
     // DM → folders with that person; group message → folders with exactly its members.
     async function openForChannel(channel) {
       postId = null;
@@ -2196,7 +2274,7 @@
           scope = { label: L('شما', 'You'), match: f => f.kind === 'personal' };
         } else {
           await loadNames([other]);
-          scope = { label: nameOf(other), match: f => f.contact === other || [...f.members, ...(f.invitees || [])].includes(other) };
+          scope = { label: nameOf(other), person: other, match: f => f.contact === other || [...f.members, ...(f.invitees || [])].includes(other) };
         }
       } else if (channel?.type === 'G') {
         try {
@@ -2214,60 +2292,92 @@
       show(() => showList());
     }
 
-    // Lists folders; notice and error are shown at the top after a change.
+    function statusTag(f) {
+      if (f.status === 'pending') return el('span', { className: 'tag' }, L('در انتظار تأیید', 'Waiting for approval'));
+      if (f.status === 'deleting') return el('span', { className: 'tag' }, L('درخواست حذف', 'Deletion requested'));
+      return null;
+    }
+
+    function folderSubtitle(f) {
+      const K = kindLabels();
+      const me = state().users.currentUserId;
+      if (f.kind === 'contact') return `${K.contact} · ${nameOf(f.contact)}`;
+      if (f.kind === 'shared') {
+        const other = [...f.members, ...(f.invitees || [])].find(id => id !== me);
+        return `${K.shared} · ${other ? nameOf(other) : ''}`;
+      }
+      if (f.kind === 'group') return `${K.group} · ${f.members.length + (f.invitees || []).length} ${L('نفر', 'people')}`;
+      return K.personal;
+    }
+
+    // Folder list. notice/error show at the top after a change.
     async function showList(notice, error) {
       const b = dialog(L('پوشه‌ها', 'Folders'));
-      if (notice) b.append(el('div', { className: 'notice' }, notice));
+      const add = el('button', { type: 'button', className: 'btn primary small' }, `+ ${L('پوشهٔ جدید', 'New folder')}`);
+      add.onclick = () => showCreate();
+      b.querySelector('.top').append(add);
+      if (notice) b.append(el('div', { className: 'banner ok', role: 'status' }, notice));
       if (error) b.append(errorNode(error));
       let folders;
       try {
         ({ folders } = await call('GET'));
       } catch (e) {
-        b.append(e.code === 'disabled' ? el('div', { className: 'notice' }, errorLabels().disabled) : errorNode(e));
+        add.remove();
+        b.append(e.code === 'disabled' ? el('div', { className: 'banner' }, errorLabels().disabled) : errorNode(e));
         return;
       }
-      await loadNames(folders.flatMap(f => [f.owner, ...f.members, ...(f.invitees || [])]));
-      const K = kindLabels();
+      await loadNames(folders.flatMap(f => [f.owner, f.contact, ...f.members, ...(f.invitees || [])]));
       if (scope) {
-        const all = el('button', { type: 'button' }, L('همهٔ پوشه‌ها', 'All folders'));
+        const all = el('button', { type: 'button', className: 'btn small' }, L('همهٔ پوشه‌ها', 'All folders'));
         all.onclick = () => { scope = null; showList(); };
-        b.append(el('div', { className: 'row' }, el('div', { className: 'grow meta' }, L(`پوشه‌های مربوط به ${scope.label}`, `Folders with ${scope.label}`)), all));
+        const bar = el('div', { className: 'banner' }, L(`پوشه‌های مربوط به ${scope.label}`, `Folders with ${scope.label}`));
+        bar.append(el('div', { className: 'row' }, all));
+        b.append(bar);
         folders = folders.filter(scope.match);
       }
+      if (postId) b.append(el('div', { className: 'banner' }, L('پوشه‌ای را باز کنید تا پیام انتخاب‌شده را به آن اضافه کنید.', 'Open a folder to add the selected message to it.')));
+
       const invites = folders.filter(f => f.role === 'invitee');
       const mine = folders.filter(f => f.role !== 'invitee');
 
       if (invites.length) {
-        b.append(el('h4', {}, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
+        b.append(el('div', { className: 'section' }, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
+        const list = el('div', { className: 'list' });
         for (const f of invites) {
-          const row = el('div', { className: 'row' });
-          row.append(el('div', { className: 'grow' }, f.name), el('span', { className: 'meta' }, `${K[f.kind]} · ${nameOf(f.owner)}`));
-          const ok = el('button', { type: 'button', className: 'primary' }, L('پذیرش', 'Accept'));
-          const no = el('button', { type: 'button' }, L('رد', 'Decline'));
+          const ok = el('button', { type: 'button', className: 'btn primary small' }, L('پذیرش', 'Accept'));
+          const no = el('button', { type: 'button', className: 'btn small' }, L('رد', 'Decline'));
           ok.onclick = () => runThenList(() => call('POST', `/${f.id}/approve`), L('پوشه پذیرفته شد.', 'Folder accepted.'));
           no.onclick = () => runThenList(() => call('POST', `/${f.id}/reject`), L('دعوت رد شد.', 'Invitation declined.'));
-          row.append(ok, no);
-          b.append(row);
+          list.append(el('div', { className: 'folder' },
+            el('div', { className: 'ficon' }, KIND_ICON[f.kind]),
+            el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name), el('div', { className: 'fmeta' }, L(`دعوت از ${nameOf(f.owner)}`, `From ${nameOf(f.owner)}`))),
+            ok, no));
         }
+        b.append(list);
       }
 
-      b.append(el('h4', {}, L('پوشه‌های من', 'My folders')));
-      if (!mine.length) b.append(el('div', { className: 'meta' }, L('هنوز پوشه‌ای ندارید.', 'You have no folders yet.')));
-      for (const f of mine) {
-        const row = el('div', { className: 'row' });
-        const status = f.status === 'pending' ? L(' · در انتظار تأیید', ' · waiting for approval')
-          : f.status === 'deleting' ? L(' · حذف در انتظار تأیید', ' · deletion waiting for approval') : '';
-        const count = f.members.length + (f.invitees || []).length;
-        row.append(
-          el('div', { className: 'grow' }, f.name),
-          el('span', { className: 'meta' }, `${K[f.kind]} · ${count} ${L('نفر', 'people')}${status}`)
-        );
-        const open = el('button', { type: 'button' }, L('باز کردن', 'Open'));
-        open.onclick = () => showFolder(f.id);
-        row.append(open);
-        b.append(row);
+      const groups = [
+        [L('شخصی', 'Personal'), mine.filter(f => f.kind === 'personal')],
+        [L('با افراد', 'With people'), mine.filter(f => f.kind === 'contact' || f.kind === 'shared')],
+        [L('گروهی', 'Group'), mine.filter(f => f.kind === 'group')]
+      ];
+      if (!mine.length) {
+        b.append(el('div', { className: 'empty' }, scope ? L('پوشه‌ای برای این گفتگو نیست.', 'No folders for this conversation.') : L('هنوز پوشه‌ای ندارید. با «پوشهٔ جدید» شروع کنید.', 'No folders yet. Start with “New folder”.')));
       }
-      b.append(createForm());
+      for (const [label, list] of groups) {
+        if (!list.length) continue;
+        b.append(el('div', { className: 'section' }, label));
+        const wrap = el('div', { className: 'list' });
+        for (const f of list) {
+          const row = el('button', { type: 'button', className: 'folder' },
+            el('div', { className: 'ficon' }, KIND_ICON[f.kind]),
+            el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f))),
+            el('span', { className: 'chev', 'aria-hidden': 'true' }, isFa() ? '‹' : '›'));
+          row.onclick = () => showFolder(f.id);
+          wrap.append(row);
+        }
+        b.append(wrap);
+      }
     }
 
     // Runs a change, then re-renders the list (showing the error if it failed).
@@ -2280,40 +2390,77 @@
       }
     }
 
-    function createForm() {
+    // New-folder screen: type cards, name with counter, people picker with avatars.
+    function showCreate() {
       const K = kindLabels();
-      const wrap = el('div', { className: 'stack' });
-      wrap.append(el('h4', {}, L('پوشهٔ جدید', 'New folder')));
-      const name = el('input', { type: 'text', maxLength: 60, placeholder: L('نام پوشه', 'Folder name') });
-      const kind = el('select', {});
-      for (const k of ['personal', 'contact', 'shared', 'group']) kind.append(el('option', { value: k }, K[k]));
-      const hint = el('div', { className: 'meta' });
-      const search = el('input', { type: 'text', placeholder: L('جستجوی کاربر…', 'Search people…') });
-      const hits = el('div', { className: 'hits' });
-      const chips = el('div', {});
+      const D = kindDescriptions();
+      const b = dialog(L('پوشهٔ جدید', 'New folder'), () => showList());
+      const limits = { personal: [0, 0], contact: [1, 1], shared: [1, 1], group: [2, 7] };
       const chosen = new Set();
-      const create = el('button', { type: 'button', className: 'primary' }, L('ایجاد', 'Create'));
-      const limits = () => ({ personal: [0, 0], contact: [1, 1], shared: [1, 1], group: [2, 7] })[kind.value];
+      let kind = 'personal';
+      if (scope?.person) { kind = 'shared'; chosen.add(scope.person); }
 
-      const renderChips = () => {
-        chips.replaceChildren(...[...chosen].map(id => {
-          const c = el('span', { className: 'chip' }, nameOf(id));
-          c.append(el('button', { type: 'button', onclick: () => { chosen.delete(id); renderChips(); sync(); } }, '✕'));
-          return c;
+      const kinds = el('div', { className: 'kinds', role: 'radiogroup' });
+      kinds.setAttribute('aria-label', L('نوع پوشه', 'Folder type'));
+      const cards = {};
+      for (const k of ['personal', 'contact', 'shared', 'group']) {
+        const card = el('button', { type: 'button', className: 'kind', role: 'radio' },
+          el('span', { className: 'ki', 'aria-hidden': 'true' }, KIND_ICON[k]), el('span', { className: 'kt' }, K[k]), el('span', { className: 'kd' }, D[k]));
+        card.onclick = () => {
+          if (kind === k) return;
+          kind = k;
+          const [, max] = limits[k];
+          while (chosen.size > max) chosen.delete([...chosen].pop());
+          sync();
+        };
+        cards[k] = card;
+        kinds.append(card);
+      }
+
+      const nameField = el('div', { className: 'field' });
+      const name = el('input', { type: 'text', className: 'input', id: 'mmrtl-folder-name', maxLength: 60, placeholder: L('مثلاً: اسکریپت‌های دیتابیس', 'e.g. Database scripts'), dir: 'auto' });
+      const counter = el('span', { className: 'counter' });
+      nameField.append(el('label', { htmlFor: 'mmrtl-folder-name' }, L('نام پوشه', 'Folder name')), name, counter);
+
+      const peopleField = el('div', { className: 'field' });
+      const peopleLabel = el('div', { className: 'label' });
+      const peopleHint = el('div', { className: 'hint' });
+      const picked = el('div', { className: 'people' });
+      const search = el('input', { type: 'text', className: 'input', placeholder: L('نام یا نام کاربری را جستجو کنید…', 'Search by name or username…'), dir: 'auto' });
+      search.setAttribute('aria-label', L('جستجوی کاربر', 'Search people'));
+      const hits = el('div', { className: 'hits', role: 'listbox' });
+      peopleField.append(peopleLabel, picked, search, hits, peopleHint);
+
+      const err = el('div', {});
+      const create = el('button', { type: 'button', className: 'btn primary block' }, L('ایجاد پوشه', 'Create folder'));
+      const cancel = el('button', { type: 'button', className: 'btn block' }, L('انصراف', 'Cancel'));
+      cancel.onclick = () => showList();
+
+      function renderPicked() {
+        picked.replaceChildren(...[...chosen].map(id => {
+          const x = el('button', { type: 'button', className: 'x', title: L('حذف', 'Remove') }, '✕');
+          x.setAttribute('aria-label', L(`حذف ${nameOf(id)}`, `Remove ${nameOf(id)}`));
+          x.onclick = () => { chosen.delete(id); sync(); };
+          return el('span', { className: 'person' }, avatar(id), nameOf(id), x);
         }));
-      };
-      const sync = () => {
-        const [min, max] = limits();
-        const people = max > 0;
-        search.hidden = hits.hidden = chips.hidden = !people;
-        hint.textContent = kind.value === 'personal' ? L('فقط شما این پوشه را می‌بینید.', 'Only you will see this folder.')
-          : kind.value === 'contact' ? L('فقط شما این پوشه را می‌بینید؛ مخاطب هیچ دسترسی ندارد.', 'Only you see this folder; the contact has no access.')
-          : min === max
-            ? L(`بعد از تأیید عضو ساخته می‌شود (${max} نفر).`, `Created after the member approves (${max} person).`)
-            : L(`بعد از تأیید همهٔ اعضا ساخته می‌شود (${min} تا ${max} نفر).`, `Created after every member approves (${min} to ${max} people).`);
-        create.disabled = chosen.size < min || chosen.size > max;
-      };
-      kind.onchange = () => { chosen.clear(); hits.replaceChildren(); renderChips(); sync(); };
+      }
+
+      function sync() {
+        for (const [k, card] of Object.entries(cards)) card.setAttribute('aria-checked', String(k === kind));
+        const [min, max] = limits[kind];
+        peopleField.hidden = max === 0;
+        peopleLabel.textContent = kind === 'contact' ? L('مخاطب', 'Contact') : L('اعضا', 'Members');
+        peopleHint.textContent = kind === 'contact' ? L('مخاطب این پوشه را نمی‌بیند.', 'The contact will not see this folder.')
+          : kind === 'shared' ? L('بعد از پذیرش او ساخته می‌شود.', 'Created once they accept.')
+          : L(`۲ تا ۷ نفر به‌جز شما؛ بعد از پذیرش همه ساخته می‌شود. (${chosen.size}/${max})`, `2 to 7 people besides you; created once everyone accepts. (${chosen.size}/${max})`);
+        search.hidden = chosen.size >= max;
+        if (search.hidden) hits.replaceChildren();
+        renderPicked();
+        const n = name.value.trim().length;
+        counter.textContent = `${name.value.length}/60`;
+        create.disabled = !n || chosen.size < min || chosen.size > max;
+      }
+      name.oninput = sync;
 
       let timer = 0;
       search.oninput = () => {
@@ -2329,44 +2476,141 @@
             });
             const users = res.ok ? await res.json() : [];
             const me = state().users.currentUserId;
-            hits.replaceChildren(...users.filter(u => u.id !== me && !u.is_bot).map(u => {
+            const found = users.filter(u => u.id !== me && !u.is_bot && !chosen.has(u.id));
+            hits.replaceChildren(...found.map(u => {
               names.set(u.id, displayName(u));
-              const pick = el('button', { type: 'button' }, displayName(u));
+              const pick = el('button', { type: 'button', className: 'hit', role: 'option' }, avatar(u.id, 'avatar lg'), displayName(u));
               pick.onclick = () => {
-                if (chosen.size >= limits()[1]) return;
+                if (chosen.size >= limits[kind][1]) return;
                 chosen.add(u.id);
                 search.value = '';
                 hits.replaceChildren();
-                renderChips();
                 sync();
+                search.focus();
               };
               return pick;
             }));
+            if (!found.length) hits.replaceChildren(el('div', { className: 'hit', style: 'cursor:default' }, L('کسی پیدا نشد.', 'No one found.')));
           } catch (e) { hits.replaceChildren(); }
         }, 250);
       };
 
       create.onclick = async () => {
-        const body = { kind: kind.value, name: name.value };
+        create.disabled = true;
+        err.replaceChildren();
+        const body = { kind, name: name.value.trim() };
         const ids = [...chosen];
-        if (kind.value === 'contact') body.contact_user_id = ids[0];
-        else if (kind.value !== 'personal') body.member_ids = ids;
+        if (kind === 'contact') body.contact_user_id = ids[0];
+        else if (kind !== 'personal') body.member_ids = ids;
         try {
           const f = await call('POST', '', body);
-          await showList(f.status === 'pending'
-            ? L('درخواست ساخت پوشه برای اعضا فرستاده شد.', 'The request was sent to the members.')
-            : L('پوشه ساخته شد.', 'Folder created.'));
+          if (f.status === 'pending') await showList(L('درخواست ساخت پوشه برای اعضا فرستاده شد. بعد از پذیرش، پوشه فعال می‌شود.', 'The request was sent. The folder becomes active once accepted.'));
+          else await showFolder(f.id, L('پوشه ساخته شد.', 'Folder created.'));
         } catch (e) {
-          await showList(undefined, e);
+          err.replaceChildren(errorNode(e));
+          create.disabled = false;
         }
       };
 
-      wrap.append(name, kind, hint, search, hits, chips, create);
+      b.append(el('div', { className: 'field' }, el('div', { className: 'label' }, L('نوع پوشه', 'Folder type')), kinds), nameField, peopleField, err,
+        el('div', { className: 'actions' }, create, cancel));
       sync();
-      return wrap;
+      name.focus();
     }
 
-    // Folder detail. notice/error show after an action on this folder.
+    // Pure: splits message text into Markdown text and fenced code blocks
+    // (``` or ~~~, closed by a fence of the same character, at least as long).
+    // An unclosed fence runs to the end, as in Mattermost.
+    function splitFences(text) {
+      if (!text) return [];
+      const parts = [];
+      let buf = [];
+      let code = null;
+      const flush = () => { if (buf.length) { parts.push({ type: 'text', value: buf.join('\n') }); buf = []; } };
+      for (const line of String(text || '').replace(/\r\n?/g, '\n').split('\n')) {
+        if (code) {
+          const t = line.trim();
+          if (t.length >= code.fence.length && t === code.fence[0].repeat(t.length)) {
+            parts.push({ type: 'code', lang: code.lang, value: code.lines.join('\n') });
+            code = null;
+          } else {
+            code.lines.push(line);
+          }
+          continue;
+        }
+        const m = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)/.exec(line);
+        if (m) {
+          flush();
+          code = { fence: m[1], lang: m[2] || '', lines: [] };
+          continue;
+        }
+        buf.push(line);
+      }
+      if (code) parts.push({ type: 'code', lang: code.lang, value: code.lines.join('\n') });
+      flush();
+      return parts;
+    }
+
+    // Markdown text as Mattermost formats it (bold, links, mentions, inline code).
+    function formatted(text) {
+      const node = el('div', { className: 'post-message__text', dir: 'auto' });
+      const fmt = window.PostUtils && window.PostUtils.formatText;
+      if (typeof fmt === 'function') {
+        try {
+          const e = state();
+          const team = e.teams?.teams?.[e.teams?.currentTeamId];
+          node.innerHTML = fmt(text, { siteURL: `${location.origin}${basePath}`, team, markdown: true, atMentions: true, mentionHighlight: false });
+          for (const a of node.querySelectorAll('a[href]')) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+          return node;
+        } catch (err) { /* plain text below */ }
+      }
+      node.textContent = text;
+      node.style.whiteSpace = 'pre-wrap';
+      return node;
+    }
+
+    function codeBlock(part) {
+      const copy = el('button', { type: 'button', className: 'btn small' }, L('کپی', 'Copy'));
+      copy.onclick = async () => {
+        try { await navigator.clipboard.writeText(part.value); copy.textContent = L('کپی شد ✓', 'Copied ✓'); } catch (e) { copy.textContent = L('کپی نشد', 'Copy failed'); }
+        setTimeout(() => { copy.textContent = L('کپی', 'Copy'); }, 1500);
+      };
+      return el('div', { className: 'code' },
+        el('div', { className: 'code-head' }, el('span', {}, part.lang || L('کد', 'code')), copy),
+        el('pre', { dir: 'ltr' }, el('code', {}, part.value)));
+    }
+
+    // Message body: text through Mattermost's formatter, code blocks in our own box.
+    function renderMessage(text) {
+      const body = el('div', { className: 'msgbody', dir: 'auto' });
+      for (const part of splitFences(text)) {
+        if (part.type === 'code') body.append(codeBlock(part));
+        else if (part.value.trim()) body.append(formatted(part.value));
+      }
+      return body;
+    }
+
+    function channelLabel(cid) {
+      const ch = state().channels?.channels?.[cid];
+      if (!ch) return '';
+      if (ch.type === 'D') return L('پیام مستقیم', 'Direct message');
+      if (ch.type === 'G') return ch.display_name || L('پیام گروهی', 'Group message');
+      return `${ch.type === 'P' ? '🔒' : '#'} ${ch.display_name}`;
+    }
+
+    function goToPost(pid) {
+      const e = state();
+      const team = e.teams?.teams?.[e.teams?.currentTeamId];
+      if (!team) return;
+      const path = `/${team.name}/pl/${pid}`;
+      const history = window.WebappUtils && window.WebappUtils.browserHistory;
+      if (history && typeof history.push === 'function') history.push(path);
+      else location.assign(`${basePath}${path}`);
+    }
+
+    const when = ms => new Date(ms).toLocaleString(isFa() ? 'fa-IR' : undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+    // Folder view. notice/error show at the top after an action on this folder.
     async function showFolder(id, notice, error) {
       const back = () => showList();
       let data;
@@ -2377,12 +2621,19 @@
         return;
       }
       const { folder: f, items } = data;
-      await loadNames([f.owner, f.delete_by, ...f.members, ...(f.invitees || []), ...items.map(i => i.added_by)]);
-      const K = kindLabels();
+      const me = state().users.currentUserId;
+      await loadNames([f.owner, f.delete_by, f.contact, ...f.members, ...(f.invitees || []), ...items.flatMap(i => [i.added_by, i.user_id])]);
       const b = dialog(f.name, back);
-      const count = f.members.length + (f.invitees || []).length;
-      b.append(el('div', { className: 'meta' }, `${K[f.kind]} · ${count} ${L('نفر', 'people')}`));
-      if (notice) b.append(el('div', { className: 'notice' }, notice));
+      b.append(el('div', { className: 'folder', style: 'cursor:default' },
+        el('div', { className: 'ficon' }, KIND_ICON[f.kind]),
+        el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f)))));
+      if (f.kind === 'shared' || f.kind === 'group') {
+        const people = el('div', { className: 'people', style: 'margin-top:8px' });
+        for (const uid of f.members) people.append(el('span', { className: 'person' }, avatar(uid), uid === f.owner ? `${nameOf(uid)} ★` : nameOf(uid)));
+        for (const uid of f.invitees || []) people.append(el('span', { className: 'person wait', title: L('هنوز نپذیرفته', 'Not accepted yet') }, avatar(uid), `${nameOf(uid)} ⏳`));
+        b.append(people);
+      }
+      if (notice) b.append(el('div', { className: 'banner ok', role: 'status' }, notice));
       if (error) b.append(errorNode(error));
 
       // Each action re-opens this folder; a failure is shown on top.
@@ -2396,63 +2647,96 @@
       };
 
       if (f.role === 'invitee') {
-        b.append(el('div', { className: 'notice' }, L('این پوشه منتظر پذیرش شماست. پیام‌ها بعد از پذیرش نمایش داده می‌شوند.', 'This folder is waiting for your acceptance. Messages show after you accept.')));
-        const ok = el('button', { type: 'button', className: 'primary' }, L('پذیرش', 'Accept'));
-        const no = el('button', { type: 'button' }, L('رد', 'Decline'));
+        const ok = el('button', { type: 'button', className: 'btn primary small' }, L('پذیرش', 'Accept'));
+        const no = el('button', { type: 'button', className: 'btn small' }, L('رد', 'Decline'));
         ok.onclick = () => act(() => call('POST', `/${id}/approve`), L('پوشه پذیرفته شد.', 'Folder accepted.'));
         no.onclick = () => runThenList(() => call('POST', `/${id}/reject`), L('دعوت رد شد.', 'Invitation declined.'));
-        b.append(el('div', { className: 'row' }, ok, no));
+        const bar = el('div', { className: 'banner warn' }, L(`${nameOf(f.owner)} شما را به این پوشه دعوت کرده است. پیام‌ها بعد از پذیرش نمایش داده می‌شوند.`, `${nameOf(f.owner)} invited you to this folder. Messages show after you accept.`));
+        bar.append(el('div', { className: 'row' }, ok, no));
+        b.append(bar);
         return;
       }
 
+      if (f.status === 'pending') {
+        b.append(el('div', { className: 'banner warn' }, L('منتظر پذیرش اعضا. تا آن موقع نمی‌توان پیام اضافه کرد.', 'Waiting for members to accept. Messages can be added after that.')));
+      }
       if (f.status === 'deleting') {
-        b.append(el('div', { className: 'notice' }, L(`${nameOf(f.delete_by)} حذف این پوشه را خواسته است.`, `${nameOf(f.delete_by)} asked to delete this folder.`)));
-        if (!(f.delete_ok || []).includes(state().users.currentUserId)) {
-          const yes = el('button', { type: 'button', className: 'primary' }, L('تأیید حذف', 'Approve deletion'));
-          const no = el('button', { type: 'button' }, L('مخالفم', 'Reject'));
+        const bar = el('div', { className: 'banner warn' }, L(`${nameOf(f.delete_by)} حذف این پوشه را خواسته است. با تأیید همهٔ اعضا حذف می‌شود.`, `${nameOf(f.delete_by)} asked to delete this folder. It is deleted once every member approves.`));
+        if (!(f.delete_ok || []).includes(me)) {
+          const yes = el('button', { type: 'button', className: 'btn primary small' }, L('تأیید حذف', 'Approve deletion'));
+          const no = el('button', { type: 'button', className: 'btn small' }, L('مخالفم', 'Reject'));
           yes.onclick = () => act(() => call('POST', `/${id}/delete-request/approve`), L('تأیید ثبت شد.', 'Approval recorded.'));
           no.onclick = () => act(() => call('POST', `/${id}/delete-request/reject`), L('حذف متوقف شد.', 'Deletion cancelled.'));
-          b.append(el('div', { className: 'row' }, yes, no));
+          bar.append(el('div', { className: 'row' }, yes, no));
         }
+        b.append(bar);
       }
 
       const active = f.status === 'active';
       if (postId && active && !items.some(i => i.post_id === postId)) {
-        const add = el('button', { type: 'button', className: 'primary' }, L('افزودن این پیام به این پوشه', 'Add this message to this folder'));
+        const add = el('button', { type: 'button', className: 'btn primary block', style: 'margin-top:12px' }, `+ ${L('افزودن پیام انتخاب‌شده به این پوشه', 'Add the selected message to this folder')}`);
         add.onclick = () => act(() => call('POST', `/${id}/items`, { post_id: postId }), L('پیام اضافه شد.', 'Message added.'));
-        b.append(el('div', { className: 'row' }, add));
+        b.append(add);
       }
 
-      b.append(el('h4', {}, L(`پیام‌ها (${items.length})`, `Messages (${items.length})`)));
-      if (!items.length) b.append(el('div', { className: 'meta' }, L('پیامی در این پوشه نیست.', 'No messages in this folder.')));
-      for (const it of items) {
-        const card = el('div', { className: 'row' });
-        card.append(el('div', { className: 'meta grow' }, `${nameOf(it.added_by)} · ${new Date(it.added_at).toLocaleString()}`));
-        card.append(el('div', { className: 'msg grow', dir: 'auto' }, it.message));
-        if (active) {
-          const rm = el('button', { type: 'button' }, L('حذف از پوشه', 'Remove from folder'));
-          rm.onclick = () => act(() => call('DELETE', `/${id}/items/${it.post_id}`), L('حذف شد.', 'Removed.'));
-          card.append(rm);
-        }
-        b.append(card);
+      b.append(el('div', { className: 'section' }, L(`پیام‌ها (${items.length})`, `Messages (${items.length})`)));
+      if (!items.length) {
+        b.append(el('div', { className: 'empty' }, L('پیامی در این پوشه نیست. از منوی «…» هر پیام، «افزودن به پوشه…» را بزنید.', 'No messages yet. Use “Add to folder…” in a message’s “…” menu.')));
       }
+      const msgs = el('div', { className: 'msgs' });
+      const sorted = [...items].sort((a, c) => c.added_at - a.added_at);
+      for (const it of sorted) {
+        const body = renderMessage(it.message);
+        const card = el('div', { className: 'msgcard' },
+          el('div', { className: 'msghead' }, avatar(it.user_id || it.added_by, 'avatar lg'),
+            el('div', { className: 'grow' }, el('span', { className: 'who' }, nameOf(it.user_id || it.added_by)),
+              el('span', { className: 'where' }, [channelLabel(it.channel_id), it.create_at ? when(it.create_at) : ''].filter(Boolean).join(' · ')))),
+          body);
+        const more = el('button', { type: 'button', className: 'more', hidden: true }, L('نمایش بیشتر', 'Show more'));
+        more.onclick = () => {
+          const open = body.classList.toggle('clamp');
+          more.textContent = open ? L('نمایش بیشتر', 'Show more') : L('نمایش کمتر', 'Show less');
+        };
+        card.append(more);
+        const foot = el('div', { className: 'msgfoot' }, el('span', { className: 'added' }, L(`افزوده‌شده توسط ${nameOf(it.added_by)} · ${when(it.added_at)}`, `Added by ${nameOf(it.added_by)} · ${when(it.added_at)}`)));
+        const go = el('button', { type: 'button', className: 'btn small' }, L('رفتن به پیام', 'Go to message'));
+        go.onclick = () => goToPost(it.post_id);
+        const copy = el('button', { type: 'button', className: 'btn small' }, L('کپی', 'Copy'));
+        copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(it.message || ''); copy.textContent = L('کپی شد ✓', 'Copied ✓'); } catch (e) { copy.textContent = L('کپی نشد', 'Copy failed'); }
+          setTimeout(() => { copy.textContent = L('کپی', 'Copy'); }, 1500);
+        };
+        foot.append(go, copy);
+        if (active) {
+          const rm = el('button', { type: 'button', className: 'btn small danger' }, L('حذف از پوشه', 'Remove'));
+          rm.onclick = () => act(() => call('DELETE', `/${id}/items/${it.post_id}`), L('پیام از پوشه حذف شد.', 'Message removed from the folder.'));
+          foot.append(rm);
+        }
+        card.append(foot);
+        msgs.append(card);
+        // Collapse long messages once the card is laid out.
+        requestAnimationFrame(() => {
+          if (body.scrollHeight > 240) { body.classList.add('clamp'); more.hidden = false; }
+        });
+      }
+      b.append(msgs);
 
       const shared = f.kind === 'shared' || f.kind === 'group';
-      const footer = el('div', { className: 'row' });
+      const footer = el('div', { className: 'footer' });
       if (shared && active) {
-        const leave = el('button', { type: 'button' }, L('ترک پوشه', 'Leave folder'));
+        const leave = el('button', { type: 'button', className: 'btn' }, L('ترک پوشه', 'Leave folder'));
         leave.onclick = () => {
-          if (confirm(L('پوشه را ترک می‌کنید؟', 'Leave this folder?'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
+          if (confirmIn(L('پوشه را ترک می‌کنید؟ پیام‌ها برای بقیهٔ اعضا باقی می‌مانند.', 'Leave this folder? Messages stay for the other members.'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
         };
         footer.append(leave);
       }
       if (active || (f.status === 'pending' && f.role === 'owner')) {
-        const del = el('button', { type: 'button' }, shared ? L('درخواست حذف', 'Request deletion') : L('حذف پوشه', 'Delete folder'));
+        const del = el('button', { type: 'button', className: 'btn danger' }, shared && active ? L('درخواست حذف پوشه', 'Request deletion') : L('حذف پوشه', 'Delete folder'));
         del.onclick = () => {
-          const msg = shared
-            ? L('حذف این پوشه نیاز به تأیید همهٔ اعضا دارد. ادامه می‌دهید؟', 'Deleting this folder needs every member to approve. Continue?')
-            : L('این پوشه برای همیشه حذف می‌شود. ادامه می‌دهید؟', 'This folder will be deleted permanently. Continue?');
-          if (confirm(msg)) runThenList(() => call('POST', `/${id}/delete-request`), L('درخواست ثبت شد.', 'Request recorded.'));
+          const msg = shared && active
+            ? L('حذف این پوشه نیاز به تأیید همهٔ اعضا دارد. درخواست را می‌فرستید؟', 'Deleting this folder needs every member to approve. Send the request?')
+            : L('این پوشه برای همیشه حذف می‌شود. پیام‌های اصلی دست نمی‌خورند. ادامه می‌دهید؟', 'This folder will be deleted permanently. The original messages are not affected. Continue?');
+          if (confirmIn(msg)) runThenList(() => call('POST', `/${id}/delete-request`), shared && active ? L('درخواست حذف برای اعضا فرستاده شد.', 'Deletion request sent.') : L('پوشه حذف شد.', 'Folder deleted.'));
         };
         footer.append(del);
       }
@@ -2460,11 +2744,11 @@
     }
 
     return {
-      open, openFolder, openForChannel, close, attach, detach,
+      open, openFolder, openCreate, openForChannel, close, attach, detach,
       setRhs: r => { rhs = r; },
       list: () => call('GET'),
       onChange: fn => listeners.add(fn),
-      loadNames, nameOf, kindLabels
+      loadNames, nameOf, kindLabels, splitFences
     };
   })();
 
@@ -2488,7 +2772,9 @@
         .mmrtl-fsb button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border-radius: 4px; cursor: pointer; color: inherit; }
         .mmrtl-fsb button:hover, .mmrtl-fsb button:focus-visible { background: rgba(var(--sidebar-text-rgb), .08); }
         .mmrtl-fsb .head { font-weight: 600; }
-        .mmrtl-fsb .sub { padding: 6px 8px 2px; font-size: 11px; opacity: .6; }
+        .mmrtl-fsb .sub { padding-block: 6px 2px; padding-inline: 22px 8px; font-size: 11px; opacity: .6; }
+        .mmrtl-fsb .item { padding-inline-start: 34px; }
+        .mmrtl-fsb .item.lvl1 { padding-inline-start: 22px; }
         .mmrtl-fsb .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mmrtl-fsb .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .6; }
         .mmrtl-fsb .badge { margin-inline-start: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--mention-bg); color: var(--mention-color); font-size: 11px; text-align: center; }
@@ -2528,7 +2814,7 @@
       const kids = [head];
       if (!closed) {
         if (invites.length) {
-          const b = el('button', { type: 'button', className: 'muted' }, el('span', { className: 'name' }, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
+          const b = el('button', { type: 'button', className: 'muted item lvl1' }, el('span', { className: 'name' }, L(`دعوت‌ها (${invites.length})`, `Invitations (${invites.length})`)));
           b.onclick = () => Folders.open();
           kids.push(b);
         }
@@ -2542,13 +2828,13 @@
           kids.push(el('div', { className: 'sub' }, label));
           for (const f of list) {
             const pending = f.status !== 'active' ? ' ⏳' : '';
-            const b = el('button', { type: 'button', title: f.name }, el('span', { className: 'name' }, `${f.name}${pending}`), el('span', { className: 'who' }, who(f, me)));
+            const b = el('button', { type: 'button', className: 'item', title: f.name }, el('span', { className: 'name' }, `${f.name}${pending}`), el('span', { className: 'who' }, who(f, me)));
             b.onclick = () => Folders.openFolder(f.id);
             kids.push(b);
           }
         }
-        const add = el('button', { type: 'button', className: 'muted' }, el('span', { className: 'name' }, `+ ${L('پوشهٔ جدید', 'New folder')}`));
-        add.onclick = () => Folders.open();
+        const add = el('button', { type: 'button', className: 'muted item lvl1' }, el('span', { className: 'name' }, `+ ${L('پوشهٔ جدید', 'New folder')}`));
+        add.onclick = () => Folders.openCreate();
         kids.push(add);
       }
       root.dir = isFa() ? 'rtl' : 'ltr';
@@ -3168,5 +3454,5 @@
 
   window.registerPlugin(PLUGIN_ID, new Plugin());
   // Node unit tests only; in the browser `module` is undefined.
-  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, detectCode: PasteAsFile.detectCode, openFenceBefore: PasteAsFile.openFenceBefore, markdownDocument: PasteAsFile.markdownDocument, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
+  if (typeof module === 'object' && module.exports) module.exports = { placeMenu: ContextMenu.placeMenu, isLongPaste: PasteAsFile.isLong, detectCode: PasteAsFile.detectCode, openFenceBefore: PasteAsFile.openFenceBefore, markdownDocument: PasteAsFile.markdownDocument, splitFences: Folders.splitFences, toMarkdown: MdExport.toMarkdown, titleFrom: MdExport.titleFrom, fileName: MdExport.fileName };
 })();
