@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -87,6 +88,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleReceiptsAck(w, userID)
 	case r.URL.Path == "/api/v1/receipts" && r.Method == http.MethodPost:
 		p.handleReceipts(w, r, userID)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/folders"):
+		p.handleFolders(w, r, userID)
 	default:
 		writeError(w, http.StatusNotFound, "not_found")
 	}
