@@ -1373,11 +1373,17 @@
       // «Dockerfile» has no extension.
       return ext || (/^dockerfile$/i.test(fileInfo?.name || '') ? 'dockerfile' : '');
     };
-    const kindOf = fileInfo => KINDS[extOf(fileInfo)] || (CODE[extOf(fileInfo)] ? 'code' : null);
+    // HTML files open as the rendered page (scripts blocked); the frame has a
+    // tab to see the source with Prism.
+    const kindOf = fileInfo => {
+      const ext = extOf(fileInfo);
+      if (ext === 'html' || ext === 'htm') return 'html';
+      return KINDS[ext] || (CODE[ext] ? 'code' : null);
+    };
     const canPreview = fileInfo => {
       const kind = kindOf(fileInfo);
       if (kind === 'markdown') return enabled.markdown;
-      if (kind === 'code') return enabled.code;
+      if (kind === 'code' || kind === 'html') return enabled.code;
       return Boolean(kind) && enabled.data;
     };
 
