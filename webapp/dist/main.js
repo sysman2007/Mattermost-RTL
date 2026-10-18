@@ -5,7 +5,9 @@
   'use strict';
 
   const PLUGIN_ID = 'com.github.sysman2007.mattermost-rtl';
-  const PREF_CATEGORY = `pp_${PLUGIN_ID}`;
+  // Mattermost stores plugin user settings under `pp_<plugin id>` cut to 32
+  // characters (the preference category limit).
+  const PREF_CATEGORY = `pp_${PLUGIN_ID}`.slice(0, 32);
   let store = null;
 
   // UI language follows the user's Mattermost language (Settings → Display → Language).
@@ -587,7 +589,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on', office_preview: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on', office_preview: 'on', reply_click: 'off', folders_view: 'panel' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -630,6 +632,8 @@
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     ReadReceipts.configure(s.read_receipts === 'on');
+    ReplyClick.configure(s.reply_click);
+    Folders.configure({ page: s.folders_view === 'page' });
     PasteAsFile.configure(s.paste_as_file === 'on', s.code_paste === 'on');
     applyCodeBlocksLTR();
   }
@@ -1295,6 +1299,62 @@
     }
 
     return { configure, placeMenu };
+  })();
+
+  // Opens a message's reply thread on a single or double click (user setting).
+  // It presses the message's own reply button, so Mattermost opens the thread.
+  const ReplyClick = (() => {
+    let mode = 'off';
+    const SKIP = 'a, button, input, textarea, select, label, img, video, audio, canvas, pre, code, [contenteditable="true"], [role="button"], ' +
+      '.post-menu, .post__header, .post-reaction-list, .post-image, .file-preview, .file-attachment, .attachment, .emoticon, .post-preview, .mmrtl-cm-quick';
+    const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+
+    // The center-channel message ID for a click that should open the thread, or null.
+    function postIdFor(e, dbl) {
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return null;
+      const post = e.target.closest?.('.post');
+      if (!post || !/^post_[a-z0-9]+$/.test(post.id) || post.classList.contains('post--system')) return null;
+      if (e.target.closest(SKIP) || post.querySelector('textarea')) return null;
+      if (!dbl) {
+        const sel = window.getSelection?.();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return null;
+      }
+      return post.id.slice(5);
+    }
+
+    // Presses the reply button of a message in the center channel; the hover
+    // bar is rendered on hover, so the message is hovered first if needed.
+    async function openThread(pid, frames = 20) {
+      for (let i = 0; i < frames; i++) {
+        const btn = document.getElementById(`CENTER_commentIcon_${pid}`);
+        if (btn) { btn.click(); return true; }
+        const post = document.getElementById(`post_${pid}`);
+        if (post) for (const type of ['mouseover', 'mouseenter', 'mousemove']) post.dispatchEvent(new MouseEvent(type, { bubbles: type !== 'mouseenter' }));
+        await nextFrame();
+      }
+      return false;
+    }
+
+    function onClick(e) {
+      const pid = mode === 'single' && postIdFor(e, false);
+      if (pid) openThread(pid, 4);
+    }
+    function onDblClick(e) {
+      const pid = mode === 'double' && postIdFor(e, true);
+      if (!pid) return;
+      window.getSelection?.()?.removeAllRanges();
+      openThread(pid, 4);
+    }
+
+    function configure(value) {
+      const next = value === 'single' || value === 'double' ? value : 'off';
+      if (next === mode) return;
+      if (mode === 'off') { document.addEventListener('click', onClick); document.addEventListener('dblclick', onDblClick); }
+      mode = next;
+      if (mode === 'off') { document.removeEventListener('click', onClick); document.removeEventListener('dblclick', onDblClick); }
+    }
+
+    return { configure, openThread };
   })();
 
   const ResizeFlip = (() => {
@@ -2022,7 +2082,11 @@
     let box = null;
     let selection = []; // message IDs to add (from a message menu or multi-select)
     let rhs = null;     // { showRHSPlugin, hideRHSPlugin } when the right-hand panel is registered
-    let host = null;    // the panel's element while it is open
+    let host = null;    // the panel's (or page's) element while it is open
+    let hostKind = null; // 'rhs' or 'page'
+    let pageMode = false; // user setting: open folders in the center area
+    let pageRoute = false; // the center-area route is registered
+    let pop = null;     // open ⋮ / right-click menu
     let pending = null; // view to render once the panel mounts
     let scope = null;   // { label, match(folder) } when opened from a conversation header
     // Where the panel component should portal Mattermost's editor (or null).
@@ -2128,6 +2192,18 @@
         .mmrtl-folders.overlay .box { width: min(560px, 94vw); max-height: 86vh; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
         .mmrtl-folders.rhs { height: 100%; overflow: auto; background: var(--center-channel-bg); }
         .mmrtl-folders.rhs .box { padding: 12px 16px 20px; border-radius: 0; }
+        .mmrtl-folders.page { grid-column: 1 / span 2; grid-row: 1 / -1; min-width: 0; height: 100%; width: 100%; overflow: auto; background: var(--center-channel-bg); }
+        .mmrtl-folders.page .box { max-width: 920px; margin: 0 auto; padding: 16px 24px 32px; border-radius: 0; }
+        .mmrtl-folders.fmenu { position: fixed; z-index: 2147483004; min-width: 190px; max-width: 300px; padding: 6px 0; border: 1px solid var(--mf-line); border-radius: 8px; background: var(--center-channel-bg); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+        .mmrtl-folders.fmenu button { display: block; width: 100%; padding: 8px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+        .mmrtl-folders.fmenu button:hover, .mmrtl-folders.fmenu button:focus-visible { background: var(--mf-soft); outline: none; }
+        .mmrtl-folders.fmenu button.danger { color: var(--error-text, #d24b4e); }
+        .mmrtl-folders .kebab { flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: var(--mf-muted); font-size: 18px; line-height: 1; cursor: pointer; }
+        .mmrtl-folders .kebab:hover, .mmrtl-folders .kebab:focus-visible, .mmrtl-folders .kebab[aria-expanded="true"] { background: var(--mf-soft); color: inherit; }
+        .mmrtl-folders .msgcard { position: relative; }
+        .mmrtl-folders .msgcard > .msghead { padding-inline-end: 28px; }
+        .mmrtl-folders .msgcard > .kebab { position: absolute; top: 6px; inset-inline-end: 6px; opacity: 0; }
+        .mmrtl-folders .msgcard:hover > .kebab, .mmrtl-folders .msgcard > .kebab:focus-visible { opacity: 1; }
         .mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
         .mmrtl-folders .top h3 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mmrtl-folders .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid var(--mf-line); background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
@@ -2265,6 +2341,12 @@
     function onKey(e) { if (e.key === 'Escape' && overlay) { e.stopPropagation(); close(); } }
 
     function close() {
+      if (host && hostKind === 'page') {
+        const history = window.WebappUtils && window.WebappUtils.browserHistory;
+        if (history && typeof history.goBack === 'function' && window.history.length > 1) history.goBack();
+        else { const t = currentTeam(); if (t) navigate(`/${t.name}`); }
+        return;
+      }
       if (host && rhs) {
         store.dispatch(rhs.hideRHSPlugin);
         return;
@@ -2288,7 +2370,7 @@
         top.append(b);
       }
       top.append(el('h3', {}, title));
-      if (!host) top.append(el('button', { type: 'button', className: 'btn icon-btn', title: L('بستن', 'Close'), onclick: close }, '✕'));
+      if (!host || hostKind === 'page') top.append(el('button', { type: 'button', className: 'btn icon-btn', title: L('بستن', 'Close'), onclick: close }, '✕'));
       box.append(top);
       if (host) {
         host.replaceChildren(box);
@@ -2307,6 +2389,13 @@
     // Renders a view in the right-hand panel (opening it), or in the overlay.
     function show(view) {
       injectCSS();
+      const t = pageMode && pageRoute && currentTeam();
+      if (t) {
+        if (host && hostKind === 'page') { view(); return; }
+        pending = view;
+        navigate(`/${t.name}/${PLUGIN_ID}/folders`);
+        return;
+      }
       if (rhs && store) {
         if (host) view(); else pending = view;
         store.dispatch(rhs.showRHSPlugin);
@@ -2316,14 +2405,59 @@
     }
 
     // The panel component calls these when it mounts / unmounts.
-    function attach(node) {
+    function attach(node, kind = 'rhs') {
       injectCSS(node.ownerDocument);
       host = node;
+      hostKind = kind;
       const view = pending || (() => showList());
       pending = null;
       view();
     }
-    function detach(node) { if (host === node) host = null; }
+    function detach(node) { if (host === node) { host = null; hostKind = null; closePop(); } }
+
+    const currentTeam = () => { const e = state(); return e.teams?.teams?.[e.teams?.currentTeamId] || null; };
+    function navigate(path) {
+      const history = window.WebappUtils && window.WebappUtils.browserHistory;
+      if (history && typeof history.push === 'function') history.push(path);
+      else location.assign(`${basePath}${path}`);
+    }
+
+    // A small menu (⋮ button or right-click) at (x, y). items: { label, run, danger } or null.
+    function closePop() {
+      if (!pop) return;
+      const { node, off } = pop;
+      pop = null;
+      off();
+      node.remove();
+    }
+    function popMenu(x, y, items) {
+      closePop();
+      const doc = (host && host.ownerDocument) || document;
+      const win = doc.defaultView || window;
+      injectCSS(doc);
+      const node = el('div', { className: 'mmrtl-folders fmenu', role: 'menu' });
+      node.dir = isFa() ? 'rtl' : 'ltr';
+      for (const it of items.filter(Boolean)) {
+        const b = el('button', { type: 'button', role: 'menuitem', className: it.danger ? 'danger' : '' }, it.label);
+        b.onclick = () => { closePop(); it.run(); };
+        node.append(b);
+      }
+      doc.body.append(node);
+      const at = ContextMenu.placeMenu(x, y, node.offsetWidth, node.offsetHeight, win.innerWidth, win.innerHeight, node.dir === 'rtl');
+      node.style.left = `${at.left}px`;
+      node.style.top = `${at.top}px`;
+      const outside = e => { if (!node.contains(e.target)) closePop(); };
+      const key = e => { if (e.key === 'Escape') { e.stopPropagation(); closePop(); } };
+      doc.addEventListener('mousedown', outside, true);
+      doc.addEventListener('keydown', key, true);
+      win.addEventListener('blur', closePop);
+      pop = { node, off: () => { doc.removeEventListener('mousedown', outside, true); doc.removeEventListener('keydown', key, true); win.removeEventListener('blur', closePop); } };
+      node.querySelector('button')?.focus();
+    }
+    const menuAt = (btn, items) => {
+      const r = btn.getBoundingClientRect();
+      popMenu(isFa() ? r.right : r.left, r.bottom + 2, items);
+    };
 
     // From a message menu: id is the message to add.
     function open(id) {
@@ -2826,6 +2960,12 @@
       return bar;
     }
 
+    const flash = (card, text) => {
+      const note = el('div', { className: 'banner ok', role: 'status', style: 'margin-top:8px' }, text);
+      card.append(note);
+      setTimeout(() => note.remove(), 1600);
+    };
+
     function itemCard(f, folderId, it, active, act) {
       const isNote = it.kind === 'note';
       const where = isNote ? L('فقط در پوشه', 'Folder only') : channelLabel(it.channel_id);
@@ -2859,8 +2999,9 @@
         };
         foot.append(copy);
       }
+      let rm = null;
       if (active) {
-        const rm = el('button', { type: 'button', className: 'btn small danger' }, isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove'));
+        rm = el('button', { type: 'button', className: 'btn small danger' }, isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove'));
         rm.onclick = () => {
           if (isNote && !confirmIn(L('این پیام فقط در پوشه است و برای همیشه حذف می‌شود. ادامه می‌دهید؟', 'This message exists only in the folder and will be deleted permanently. Continue?'))) return;
           act(() => call('DELETE', `/${folderId}/items/${it.id}`), isNote ? L('پیام حذف شد.', 'Message deleted.') : L('پیام از پوشه حذف شد.', 'Message removed from the folder.'));
@@ -2868,6 +3009,36 @@
         foot.append(rm);
       }
       card.append(foot);
+
+      // The message actions, as in a conversation: from the ⋮ button or a right-click.
+      const copyText = async (text, okText) => {
+        try { await navigator.clipboard.writeText(text); flash(card, okText); } catch (e) { flash(card, L('کپی نشد', 'Copy failed')); }
+      };
+      const items = () => {
+        const team = currentTeam();
+        return [
+          active ? { label: L('افزودن واکنش', 'Add reaction'), run: () => card.querySelector('.rchip.add')?.click() } : null,
+          !isNote ? { label: L('پاسخ در رشته', 'Reply in thread'), run: () => { goToPost(it.post_id); ReplyClick.openThread(it.post_id, 120); } } : null,
+          !isNote ? { label: L('رفتن به پیام', 'Go to message'), run: () => goToPost(it.post_id) } : null,
+          !isNote ? { label: L('ارسال به…', 'Send to…'), run: () => Forward.open(it.post_id) } : null,
+          it.message ? { label: L('کپی متن', 'Copy text'), run: () => copyText(it.message, L('متن کپی شد ✓', 'Text copied ✓')) } : null,
+          !isNote && team ? { label: L('کپی لینک', 'Copy link'), run: () => copyText(`${location.origin}${basePath}/${team.name}/pl/${it.post_id}`, L('لینک کپی شد ✓', 'Link copied ✓')) } : null,
+          active ? { label: isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove from folder'), danger: true, run: () => rm.click() } : null
+        ];
+      };
+      const kebab = el('button', { type: 'button', className: 'kebab', title: L('گزینه‌های پیام', 'Message options') }, '⋮');
+      kebab.setAttribute('aria-label', L('گزینه‌های پیام', 'Message options'));
+      kebab.setAttribute('aria-haspopup', 'menu');
+      kebab.onclick = () => menuAt(kebab, items());
+      card.append(kebab);
+      card.addEventListener('contextmenu', e => {
+        // Links, images, code, inputs, selected text and Shift keep the browser's menu.
+        if (e.shiftKey || e.target.closest('a, img, video, pre, code, input, textarea, .fmenu')) return;
+        const sel = (card.ownerDocument.defaultView || window).getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+        e.preventDefault();
+        popMenu(e.clientX, e.clientY, items());
+      });
       requestAnimationFrame(() => {
         if (body.scrollHeight > 240) { body.classList.add('clamp'); more.hidden = false; }
       });
@@ -3098,9 +3269,10 @@
       const me = state().users.currentUserId;
       await loadNames([f.owner, f.delete_by, f.contact, ...f.members, ...(f.invitees || []), ...items.flatMap(i => [i.added_by, i.user_id])]);
       const b = dialog(f.name, back);
-      b.append(el('div', { className: 'folder', style: 'cursor:default' },
+      const head = el('div', { className: 'folder', style: 'cursor:default' },
         el('div', { className: 'ficon' }, KIND_ICON[f.kind]),
-        el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f)))));
+        el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f))));
+      b.append(head);
       if (f.kind === 'shared' || f.kind === 'group') {
         const people = el('div', { className: 'people', style: 'margin-top:8px' });
         for (const uid of f.members) people.append(el('span', { className: 'person' }, avatar(uid), uid === f.owner ? `${nameOf(uid)} ★` : nameOf(uid)));
@@ -3197,31 +3369,36 @@
         b.append(jump);
       }
 
+      // Folder actions sit in a ⋮ menu beside the folder name.
       const shared = f.kind === 'shared' || f.kind === 'group';
-      const footer = el('div', { className: 'footer' });
+      const actions = [];
       if (shared && active) {
-        const leave = el('button', { type: 'button', className: 'btn' }, L('ترک پوشه', 'Leave folder'));
-        leave.onclick = () => {
+        actions.push({ label: L('ترک پوشه', 'Leave folder'), run: () => {
           if (confirmIn(L('پوشه را ترک می‌کنید؟ پیام‌ها برای بقیهٔ اعضا باقی می‌مانند.', 'Leave this folder? Messages stay for the other members.'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
-        };
-        footer.append(leave);
+        } });
       }
       if (active || (f.status === 'pending' && f.role === 'owner')) {
-        const del = el('button', { type: 'button', className: 'btn danger' }, shared && active ? L('درخواست حذف پوشه', 'Request deletion') : L('حذف پوشه', 'Delete folder'));
-        del.onclick = () => {
+        actions.push({ label: shared && active ? L('درخواست حذف از پوشه', 'Request deletion') : L('حذف پوشه', 'Delete folder'), danger: true, run: () => {
           const msg = shared && active
             ? L('حذف این پوشه نیاز به تأیید همهٔ اعضا دارد. درخواست را می‌فرستید؟', 'Deleting this folder needs every member to approve. Send the request?')
             : L('این پوشه برای همیشه حذف می‌شود. پیام‌های اصلی دست نمی‌خورند. ادامه می‌دهید؟', 'This folder will be deleted permanently. The original messages are not affected. Continue?');
           if (confirmIn(msg)) runThenList(() => call('POST', `/${id}/delete-request`), shared && active ? L('درخواست حذف برای اعضا فرستاده شد.', 'Deletion request sent.') : L('پوشه حذف شد.', 'Folder deleted.'));
-        };
-        footer.append(del);
+        } });
       }
-      if (footer.children.length) b.append(footer);
+      if (actions.length) {
+        const kebab = el('button', { type: 'button', className: 'kebab', title: L('گزینه‌های پوشه', 'Folder options') }, '⋮');
+        kebab.setAttribute('aria-label', L('گزینه‌های پوشه', 'Folder options'));
+        kebab.setAttribute('aria-haspopup', 'menu');
+        kebab.onclick = () => menuAt(kebab, actions);
+        head.append(kebab);
+      }
     }
 
     return {
       open, openMany, openFolder, openCreate, openForChannel, close, attach, detach,
       setRhs: r => { rhs = r; },
+      setPageRoute: on => { pageRoute = on; },
+      configure: ({ page }) => { pageMode = Boolean(page); },
       subscribeEditor: fn => { editorSubs.add(fn); fn(editorSlot); return () => editorSubs.delete(fn); },
       list: () => call('GET'),
       onChange: fn => listeners.add(fn),
@@ -3927,6 +4104,8 @@
             { title: 'زبان کد هنگام چسباندن', settings: [radio('code_paste', 'انتخاب زبان برای کدِ چسبانده‌شده', 'وقتی کد می‌چسبانید (یا داخل یک بلوک ``` بدون زبان)، نواری زبان را حدس می‌زند و اجازه می‌دهد آن را در بلوک کد با زبان درست قرار دهید (Mattermost آن را رنگ‌آمیزی می‌کند) یا کد بلند را به‌صورت فایل بفرستید.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'تیک دیده‌شدن پیام', settings: [radio('read_receipts', 'نمایش ✓ و ✓✓ زیر پیام‌های شما', 'فقط وقتی مدیر سیستم این قابلیت را فعال کرده باشد کار می‌کند. خاموش کردن، فقط نمایش را در صفحهٔ شما پنهان می‌کند.', [['on', 'نمایش'], ['off', 'پنهان']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
+            { title: 'باز کردن پاسخ با کلیک', settings: [radio('reply_click', 'باز کردن رشتهٔ پاسخ با کلیک روی پیام', 'کلیک روی متن پیام، پنل پاسخ (Reply) همان پیام را باز می‌کند. کلیک روی لینک، دکمه، تصویر، کد یا متن انتخاب‌شده کار خودش را می‌کند. خود Mattermost هم در Display گزینهٔ یک‌کلیکی «Click to open threads» دارد.', [['off', 'غیرفعال'], ['single', 'با یک‌بار کلیک'], ['double', 'با دوبار کلیک']])] },
+            { title: 'محل نمایش پوشه‌ها', settings: [radio('folders_view', 'پوشه‌ها کجا باز شوند', 'پنل سمت راست (کنار گفتگو) یا کل فضای اصلی پیام‌رسان.', [['panel', 'پنل سمت راست'], ['page', 'فضای کامل پیام‌رسان']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
         });
@@ -3959,13 +4138,15 @@
       if (React && typeof registry.registerRightHandSidebarComponent === 'function') {
         // The panel renders inside Mattermost's React tree, so it can portal
         // Mattermost's own editor (with its store) into the folder view.
-        const FoldersPanel = () => {
+        // kind 'rhs': the right-hand panel; 'page': the center area (no channel
+        // is shown there, so the editor can use CENTER's «post_textbox» id).
+        const folderHost = kind => () => {
           const ref = React.useRef(null);
           const [slot, setSlot] = React.useState(null);
           React.useEffect(() => {
             const el = ref.current;
             const off = Folders.subscribeEditor(setSlot);
-            Folders.attach(el);
+            Folders.attach(el, kind);
             return () => { off(); Folders.detach(el); };
           }, []);
           const Editor = window.Components && window.Components.AdvancedTextEditor;
@@ -3974,12 +4155,17 @@
               // RHS_COMMENT gives the box the id «reply_textbox», which is free while
               // this panel occupies the right-hand side (CENTER would duplicate
               // the channel's own «post_textbox»). No rootId: a normal post.
-              key: slot.key, location: 'RHS_COMMENT', channelId: slot.channelId, rootId: '', isThreadView: false,
+              key: slot.key, location: kind === 'page' ? 'CENTER' : 'RHS_COMMENT', channelId: slot.channelId, rootId: '', isThreadView: false,
               placeholder: slot.placeholder, storageKey: slot.storageKey, afterSubmit: slot.afterSubmit
             }), slot.node)
             : null;
-          return React.createElement('div', { ref, className: 'mmrtl-folders rhs' }, portal);
+          return React.createElement('div', { ref, className: `mmrtl-folders ${kind}` }, portal);
         };
+        const FoldersPanel = folderHost('rhs');
+        if (typeof registry.registerNeedsTeamRoute === 'function') {
+          registry.registerNeedsTeamRoute('/folders', folderHost('page'));
+          Folders.setPageRoute(true);
+        }
         Folders.setRhs(registry.registerRightHandSidebarComponent(FoldersPanel, L('پوشه‌ها', 'Folders')));
       }
       // The sidebar section and the header button appear only when the admin has

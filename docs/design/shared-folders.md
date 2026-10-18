@@ -106,6 +106,8 @@ KV پلاگین کلید/مقدار است و نمی‌تواند با پیشو�
 
 - **ویرایشگر Mattermost:** Mattermost کامپوننت `window.Components.AdvancedTextEditor` را در اختیار افزونه‌ها قرار می‌دهد (props: `location`, `channelId`, `rootId`, `placeholder`, `storageKey`, `afterSubmit`). پنل سمت راست (که Mattermost آن را درون درخت React و Redux خودش رندر می‌کند) این ویرایشگر را با `ReactDOM.createPortal` داخل نمای پوشه قرار می‌دهد.
   - `location: 'RHS_COMMENT'` شناسهٔ `reply_textbox` می‌دهد. وقتی این پنل باز است، کادر پاسخ دیگری در صفحه نیست و تکراری نمی‌شود؛ `CENTER` شناسهٔ `post_textbox` کادر اصلی گفتگو را تکرار می‌کرد.
+- **فضای کامل (تنظیم کاربر `folders_view = page`):** همان نماها با `registerNeedsTeamRoute('/folders', …)` در آدرس `/<تیم>/com.github.sysman2007.mattermost-rtl/folders` رندر می‌شوند. Mattermost در این مسیر نه کانالی رندر می‌کند و نه منوی کانال‌ها را. پس ویرایشگر `location: 'CENTER'` (شناسهٔ `post_textbox`) می‌گیرد و نما با `grid-column: 1 / span 2` ستون‌های lhs و center شبکهٔ `.main-wrapper` را پر می‌کند. ✕ با `browserHistory.goBack()` برمی‌گردد.
+- **منوها:** کارهای پوشه (ترک، درخواست حذف/حذف) در منوی ⋮ کنار نام پوشه‌اند. هر کارت پیام منوی ⋮ و راست‌کلیک دارد. «پاسخ در رشته» به permalink پیام می‌رود و دکمهٔ Reply خود Mattermost (`CENTER_commentIcon_<postId>`) را می‌زند.
   - `rootId: ''` باعث می‌شود پیام به‌صورت پیام عادی ارسال شود، نه پاسخ رشته (آزموده شد).
   - `storageKey` برای هر پوشه جداست، پس پیش‌نویس پوشه با پیش‌نویس همان گفتگو قاطی نمی‌شود.
   - بعد از ارسال، پیام به پوشه اضافه می‌شود. اگر `afterSubmit` شناسهٔ پیام را ندهد، آخرین پیام کاربر در آن گفتگو (در ۲۰ ثانیهٔ اخیر) استفاده می‌شود.
