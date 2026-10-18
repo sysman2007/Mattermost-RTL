@@ -1488,7 +1488,7 @@
     async function loadText(fileInfo) {
       const office = Boolean(OFFICE[kindOf(fileInfo)]);
       if (fileInfo.size > (office ? MAX_OFFICE_BYTES : MAX_BYTES)) throw new Error('too-large');
-      const res = await fetch(`${basePath}/api/v4/files/${encodeURIComponent(fileInfo.id)}`, {
+      const res = await fetch(fileInfo.url || `${basePath}/api/v4/files/${encodeURIComponent(fileInfo.id)}`, {
         credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' }
       });
       if (!res.ok) throw new Error(String(res.status));
@@ -1538,14 +1538,14 @@
       });
     }
 
-    function injectCSS() {
-      if (document.getElementById('mmrtl-md-style')) return;
-      const st = document.createElement('style');
+    function injectCSS(doc = document) {
+      if (doc.getElementById('mmrtl-md-style')) return;
+      const st = doc.createElement('style');
       st.id = 'mmrtl-md-style';
       st.textContent = `
         .mmrtl-md-frame { display: block; width: min(1100px, 92vw); height: calc(100vh - 140px); border: 0; border-radius: 8px; background: transparent; }
         .mmrtl-md-error { padding: 32px; color: rgba(var(--center-channel-color-rgb), 0.8); background: var(--center-channel-bg); border-radius: 8px; }`;
-      (document.head || document.documentElement).appendChild(st);
+      (doc.head || doc.documentElement).appendChild(st);
     }
 
     function register(registry) {
@@ -1577,7 +1577,44 @@
       return frame;
     }
 
-    return { register, configure, canPreview, createFrame };
+    // A preview frame for an attachment outside Mattermost's preview modal
+    // (folder views). win is the window the frame is shown in (pop-out aware).
+    function createFileFrame(fileInfo, win = window) {
+      injectCSS(win.document);
+      const frame = win.document.createElement('iframe');
+      frame.className = 'mmrtl-md-frame';
+      frame.title = fileInfo.name;
+      frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+      frame.referrerPolicy = 'no-referrer';
+      frame.srcdoc = srcdoc();
+      const data = Promise.all([loadText(fileInfo), loadFont()]);
+      const fail = e => {
+        const box = win.document.createElement('div');
+        box.className = 'mmrtl-md-error';
+        box.dir = 'auto';
+        box.textContent = e && e.message === 'too-large'
+          ? L('این فایل برای پیش‌نمایش بزرگ است. آن را دانلود کنید.', 'This file is too large to preview. Download it instead.')
+          : L('بارگذاری فایل ممکن نشد.', 'The file could not be loaded.');
+        frame.replaceWith(box);
+      };
+      data.catch(fail);
+      let sent = false;
+      const onMessage = async e => {
+        if (!frame.isConnected) { win.removeEventListener('message', onMessage); return; }
+        if (sent || e.source !== frame.contentWindow || e.data?.type !== 'mmrtl-md-ready') return;
+        sent = true;
+        win.removeEventListener('message', onMessage);
+        try {
+          const [md, font] = await data;
+          const transfer = [font, md instanceof ArrayBuffer ? md : null].filter(Boolean);
+          frame.contentWindow?.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', transfer);
+        } catch (err) { /* fail() already replaced the frame */ }
+      };
+      win.addEventListener('message', onMessage);
+      return frame;
+    }
+
+    return { register, configure, canPreview, createFrame, createFileFrame };
   })();
 
   // ── Message → Markdown: the «MD» button on the hover bar turns a post into a
@@ -2060,7 +2097,7 @@
   // "disabled" means the admin hasn't turned the feature on.
   // Inserts or refreshes a <style> by id. version changes on every release, so an
   // upgraded plugin replaces the old rules even if the page was not reloaded.
-  const STYLE_VERSION = '2.8.0';
+  const STYLE_VERSION = '2.8.1';
   function upsertStyle(doc, id, css) {
     let st = doc.getElementById(id);
     if (st && st.dataset.v === STYLE_VERSION) return;
@@ -2281,6 +2318,25 @@
         .mmrtl-folders .files .file:hover { background: var(--mf-soft); }
         .mmrtl-folders .files .fname2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
         .mmrtl-folders .files .fsize { color: var(--mf-muted); font-size: 11px; white-space: nowrap; }
+        .mmrtl-folders .files .filerow { display: inline-flex; align-items: stretch; max-width: 100%; }
+        .mmrtl-folders .files .filerow .file { border-start-end-radius: 0; border-end-end-radius: 0; min-width: 0; }
+        .mmrtl-folders .files .fdl { display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid var(--mf-line); border-inline-start: 0; border-start-end-radius: 6px; border-end-end-radius: 6px; color: var(--mf-muted); text-decoration: none; }
+        .mmrtl-folders .files .fdl:hover { background: var(--mf-soft); color: inherit; }
+        .mmrtl-folders.viewer { position: fixed; inset: 0; z-index: 2147483005; display: flex; flex-direction: column; background: rgba(0,0,0,.86); color: #fff; }
+        .mmrtl-folders.viewer .vbar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
+        .mmrtl-folders.viewer .vtitle { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+        .mmrtl-folders.viewer .vbtn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; border-radius: 4px; background: transparent; color: #fff; font-size: 18px; text-decoration: none; cursor: pointer; }
+        .mmrtl-folders.viewer .vbtn:hover, .mmrtl-folders.viewer .vbtn:focus-visible { background: rgba(255,255,255,.16); }
+        .mmrtl-folders.viewer .vstage { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 56px 24px; }
+        .mmrtl-folders.viewer .vimg, .mmrtl-folders.viewer .vmedia { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+        .mmrtl-folders.viewer .mmrtl-md-frame { width: min(1100px, 100%); height: 100%; }
+        .mmrtl-folders.viewer .vnone { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 40px; border-radius: 8px; background: var(--center-channel-bg); color: var(--center-channel-color); }
+        .mmrtl-folders.viewer .vnone .ficon2 { font-size: 40px; }
+        .mmrtl-folders.viewer .vnav { position: absolute; top: 50%; width: 40px; height: 56px; margin-top: -28px; border: 0; border-radius: 6px; background: rgba(255,255,255,.12); color: #fff; font-size: 28px; cursor: pointer; }
+        .mmrtl-folders.viewer .vnav:hover { background: rgba(255,255,255,.24); }
+        .mmrtl-folders.viewer .vnav.prev { inset-inline-start: 8px; }
+        .mmrtl-folders.viewer .vnav.next { inset-inline-end: 8px; }
+        .mmrtl-folders.viewer [hidden] { display: none !important; }
         .mmrtl-folders .reactions { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
         .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .72); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
         .mmrtl-folders .rchip:hover { background: rgba(var(--center-channel-color-rgb), .16); }
@@ -2295,6 +2351,14 @@
         .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 6px; }
         .mmrtl-folders .composer-head { display: flex; align-items: center; justify-content: flex-start; }
         .mmrtl-folders .mm-editor { min-height: 48px; }
+        /* Mattermost's editor outside its own layout: drop its 24px side gutters
+           and the textarea resize grip, and frame it like the folder box. */
+        .mmrtl-folders .mm-editor .AdvancedTextEditor { padding: 0 !important; }
+        .mmrtl-folders .mm-editor .AdvancedTextEditor__body { border: 1px solid rgba(var(--center-channel-color-rgb), .16) !important; border-radius: 4px !important; box-shadow: none !important; }
+        .mmrtl-folders .mm-editor .AdvancedTextEditor__body:focus-within { border-color: rgba(var(--center-channel-color-rgb), .32) !important; box-shadow: inset 0 0 0 1px rgba(var(--center-channel-color-rgb), .16) !important; }
+        .mmrtl-folders .mm-editor textarea { resize: none !important; }
+        .mmrtl-folders .mm-editor .AdvancedTextEditor__footer { padding: 2px 0 0 !important; min-height: 0; }
+        .mmrtl-folders .mm-editor .postBoxIndicator { padding: 0 !important; }
         .mmrtl-folders .icon-fallback { display: none; }
         .mmrtl-folders .mmbox { position: relative; display: flex; flex-direction: column; border: 1px solid rgba(var(--center-channel-color-rgb), .16); border-radius: 4px; background: var(--center-channel-bg); }
         .mmrtl-folders .mmbox:focus-within { border-color: rgba(var(--center-channel-color-rgb), .32); box-shadow: inset 0 0 0 1px rgba(var(--center-channel-color-rgb), .16); }
@@ -2867,23 +2931,94 @@
 
     // Attachments: images as thumbnails (open the preview), other files as a
     // download chip. Mattermost serves them and checks channel access itself.
+    // fi.url: a note's file served by the plugin (no separate preview/thumbnail).
+    const fileUrl = (fi, suffix = '') => (fi.url
+      ? (suffix === '?download=1' ? `${fi.url}?download=1` : fi.url)
+      : V4(`/files/${encodeURIComponent(fi.id)}${suffix}`));
+    const isImageFile = fi => fi.has_preview_image || /^image\//.test(fi.mime_type || '');
+    const mediaKind = fi => (/^video\/(mp4|webm|ogg)$/.test(fi.mime_type || '') ? 'video' : /^audio\//.test(fi.mime_type || '') ? 'audio' : null);
+
+    // Opens an attachment like Mattermost's file preview: images, video and
+    // audio directly; Markdown, data, code, HTML and Office files in the
+    // plugin's sandboxed preview frame; anything else offers a download.
+    function openViewer(files, index) {
+      const doc = (host && host.ownerDocument) || document;
+      const win = doc.defaultView || window;
+      injectCSS(doc);
+      let i = index;
+      const shade = el('div', { className: 'mmrtl-folders viewer', role: 'dialog' });
+      shade.setAttribute('aria-modal', 'true');
+      shade.dir = isFa() ? 'rtl' : 'ltr';
+      const title = el('div', { className: 'vtitle', dir: 'auto' });
+      const dl = el('a', { className: 'vbtn', title: L('دانلود', 'Download') }, '⤓');
+      dl.setAttribute('aria-label', L('دانلود', 'Download'));
+      const x = el('button', { type: 'button', className: 'vbtn', title: L('بستن', 'Close') }, '✕');
+      x.setAttribute('aria-label', L('بستن', 'Close'));
+      const prev = el('button', { type: 'button', className: 'vnav prev', title: L('قبلی', 'Previous') }, isFa() ? '›' : '‹');
+      const next = el('button', { type: 'button', className: 'vnav next', title: L('بعدی', 'Next') }, isFa() ? '‹' : '›');
+      const stage = el('div', { className: 'vstage' });
+      shade.append(el('div', { className: 'vbar' }, title, dl, x), stage, prev, next);
+      const close = () => { doc.removeEventListener('keydown', onKey, true); shade.remove(); };
+      const onKey = e => {
+        if (e.key === 'Escape') { e.stopPropagation(); close(); }
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.stopPropagation(); go((e.key === 'ArrowRight') !== isFa() ? 1 : -1); }
+      };
+      const go = step => { const n = i + step; if (n >= 0 && n < files.length) { i = n; render(); } };
+      const render = () => {
+        const fi = files[i];
+        title.textContent = `${fi.name} · ${humanSize(fi.size)}`;
+        dl.href = fileUrl(fi, '?download=1');
+        dl.setAttribute('download', fi.name);
+        prev.hidden = i === 0;
+        next.hidden = i === files.length - 1;
+        const media = mediaKind(fi);
+        let view;
+        if (isImageFile(fi)) view = el('img', { className: 'vimg', src: fileUrl(fi, '/preview'), alt: fi.name });
+        else if (media) { view = el(media, { className: 'vmedia', src: fileUrl(fi), controls: true }); view.preload = 'metadata'; }
+        else if (MdPreview.canPreview(fi)) view = MdPreview.createFileFrame(fi, win);
+        else {
+          const get = el('a', { className: 'btn primary', href: fileUrl(fi, '?download=1') }, L('دانلود فایل', 'Download file'));
+          get.setAttribute('download', fi.name);
+          view = el('div', { className: 'vnone' }, el('div', { className: 'ficon2', 'aria-hidden': 'true' }, fileIcon(fi.extension)),
+            el('div', {}, L('برای این نوع فایل پیش‌نمایشی وجود ندارد.', 'No preview is available for this file type.')), get);
+        }
+        stage.replaceChildren(view);
+      };
+      x.onclick = close;
+      prev.onclick = () => go(-1);
+      next.onclick = () => go(1);
+      shade.addEventListener('mousedown', e => { if (e.target === shade || e.target === stage) close(); });
+      doc.addEventListener('keydown', onKey, true);
+      doc.body.append(shade);
+      render();
+      x.focus();
+    }
+
     function attachmentList(files) {
       const wrap = el('div', { className: 'files' });
-      for (const fi of files || []) {
-        const isImage = fi.has_preview_image || /^image\//.test(fi.mime_type || '');
-        if (isImage) {
-          const a = el('a', { className: 'thumb', href: V4(`/files/${encodeURIComponent(fi.id)}/preview`), target: '_blank', rel: 'noopener noreferrer', title: fi.name },
-            el('img', { src: V4(`/files/${encodeURIComponent(fi.id)}/thumbnail`), alt: fi.name, loading: 'lazy' }));
+      (files || []).forEach((fi, index) => {
+        const open = e => {
+          if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return; // new tab / save as stay native
+          e.preventDefault();
+          openViewer(files, index);
+        };
+        if (isImageFile(fi)) {
+          const a = el('a', { className: 'thumb', href: fileUrl(fi, '/preview'), target: '_blank', rel: 'noopener noreferrer', title: fi.name },
+            el('img', { src: fileUrl(fi, '/thumbnail'), alt: fi.name, loading: 'lazy' }));
+          a.addEventListener('click', open);
           wrap.append(a);
         } else {
-          const a = el('a', { className: 'file', href: V4(`/files/${encodeURIComponent(fi.id)}?download=1`), title: fi.name },
+          const a = el('a', { className: 'file', href: fileUrl(fi, '?download=1'), title: fi.name },
             el('span', { className: 'ficon2', 'aria-hidden': 'true' }, fileIcon(fi.extension)),
             el('span', { className: 'fname2', dir: 'auto' }, fi.name),
             el('span', { className: 'fsize' }, humanSize(fi.size)));
-          a.setAttribute('download', fi.name);
-          wrap.append(a);
+          a.addEventListener('click', open);
+          const dl = el('a', { className: 'fdl', href: fileUrl(fi, '?download=1'), title: L('دانلود', 'Download') }, '⤓');
+          dl.setAttribute('download', fi.name);
+          dl.setAttribute('aria-label', L(`دانلود ${fi.name}`, `Download ${fi.name}`));
+          wrap.append(el('span', { className: 'filerow' }, a, dl));
         }
-      }
+      });
       return wrap;
     }
 
@@ -2981,7 +3116,9 @@
         more.textContent = collapsed ? L('نمایش بیشتر', 'Show more') : L('نمایش کمتر', 'Show less');
       };
       card.append(more);
-      if (it.files && it.files.length) card.append(attachmentList(it.files));
+      // A folder-only note's files are served by the plugin (folder members only).
+      const files = (it.files || []).map(fi => (isNote ? { ...fi, url: `${API()}/${encodeURIComponent(folderId)}/notes/${encodeURIComponent(it.id)}/files/${encodeURIComponent(fi.id)}` } : fi));
+      if (files.length) card.append(attachmentList(files));
       card.append(reactionBar(folderId, it, active));
 
       const foot = el('div', { className: 'msgfoot' }, el('span', { className: 'added' },

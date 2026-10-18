@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"path"
 	"regexp"
@@ -13,11 +15,11 @@ import (
 )
 
 // Folder-only notes: a message (text and/or files) that exists only in a folder.
-// It never appears in a conversation. Its files are stored by Mattermost in the
-// folder's own conversation channel (self-DM, the DM of a shared folder, or the
-// group message of a group folder) without a post, so they don't show in that
-// conversation or in file search, and only that conversation's members can
-// download them (Mattermost's own channel permission).
+// It never appears in a conversation. Its files are stored with Mattermost's
+// file store (plugin UploadFile) without a post, so they don't show in any
+// conversation or in file search. Mattermost doesn't link such files to a
+// channel, so its own file API can't serve them: the plugin serves them at
+// /folders/{fid}/notes/{nid}/files/{fileId}, to folder members only.
 //
 // A note is its own KV document (fn_<id>); the folder's item list only refers
 // to it, so long notes don't bloat the list. Reactions on a note live in the
@@ -317,6 +319,69 @@ func (p *Plugin) noteView(n *folderNote, it folderItem) folderItemView {
 	}
 }
 
+// inlineMime: types a browser may show in place (raster images, audio, video).
+// Everything else, SVG and HTML included, is sent as an attachment.
+func inlineMime(m string) bool {
+	switch {
+	case strings.HasPrefix(m, "image/"):
+		return m == "image/png" || m == "image/jpeg" || m == "image/gif" || m == "image/webp" || m == "image/bmp"
+	case strings.HasPrefix(m, "video/"), strings.HasPrefix(m, "audio/"):
+		return true
+	}
+	return false
+}
+
+// serveNoteFile sends one file of a note to a folder member.
+func (p *Plugin) serveNoteFile(w http.ResponseWriter, r *http.Request, uid, fid, nid, fileID string) {
+	if !model.IsValidId(nid) || !model.IsValidId(fileID) {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	f, err := p.readFolderFor(uid, fid)
+	if err == nil && !isMember(f, uid) {
+		err = errFolderNotFound
+	}
+	var n *folderNote
+	if err == nil {
+		n, err = p.noteInFolder(fid, nid)
+	}
+	if err == nil && !contains(n.FileIDs, fileID) {
+		err = errFolderNotFound
+	}
+	if err != nil {
+		writeFolderError(w, err)
+		return
+	}
+	fi, appErr := p.API.GetFileInfo(fileID)
+	if appErr != nil || fi == nil || fi.DeleteAt != 0 {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	data, appErr := p.API.GetFile(fileID)
+	if appErr != nil {
+		p.API.LogError("Folder note file could not be read", "file_id", fileID, "error", appErr.Error())
+		writeError(w, http.StatusInternalServerError, "store_failed")
+		return
+	}
+	ctype := fi.MimeType
+	if ctype == "" {
+		ctype = "application/octet-stream"
+	}
+	disposition := "attachment"
+	if r.URL.Query().Get("download") == "" && inlineMime(ctype) {
+		disposition = "inline"
+	} else if !inlineMime(ctype) {
+		ctype = "application/octet-stream" // never let the browser render it as a page
+	}
+	h := w.Header()
+	h.Set("Content-Type", ctype)
+	h.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": fi.Name}))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Cache-Control", "private, max-age=3600")
+	http.ServeContent(w, r, "", model.GetTimeForMillis(fi.CreateAt), bytes.NewReader(data))
+}
+
 // handleNotes routes /api/v1/folders/{fid}/notes... and /conversation.
 // parts[0] is the folder ID and parts[1] is "notes" or "conversation".
 func (p *Plugin) handleNotes(w http.ResponseWriter, r *http.Request, uid string, parts []string) bool {
@@ -339,6 +404,8 @@ func (p *Plugin) handleNotes(w http.ResponseWriter, r *http.Request, uid string,
 			return true
 		}
 		writeJSON(w, http.StatusCreated, p.noteView(n, folderItem{NoteID: n.ID, AddedBy: uid, AddedAt: n.CreateAt}))
+	case len(parts) == 5 && parts[1] == "notes" && parts[3] == "files" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		p.serveNoteFile(w, r, uid, fid, parts[2], parts[4])
 	case len(parts) == 4 && parts[1] == "notes" && parts[3] == "reactions" && r.Method == http.MethodPost:
 		var body struct {
 			EmojiName string `json:"emoji_name"`

@@ -42,6 +42,17 @@ func (a *folderAPI) UploadFile(data []byte, channelID, filename string) (*model.
 	return fi, nil
 }
 
+func (a *folderAPI) GetFile(id string) ([]byte, *model.AppError) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, u := range fakeUploads {
+		if fi, ok := fakeFiles[id]; ok && fi.Name == u.name {
+			return []byte(u.data), nil
+		}
+	}
+	return nil, model.NewAppError("GetFile", "not found", nil, "", http.StatusNotFound)
+}
+
 func (a *folderAPI) GetFileInfo(id string) (*model.FileInfo, *model.AppError) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -247,4 +258,44 @@ func TestCleanFileName(t *testing.T) {
 	assert.Equal(t, "passwd", cleanFileName("../../etc/passwd"))
 	assert.Equal(t, "evil.txt", cleanFileName(`C:\temp\evil.txt`))
 	assert.Equal(t, "file", cleanFileName("  "))
+}
+
+func TestNoteFilesAreServedToFolderMembersOnly(t *testing.T) {
+	resetNoteFakes()
+	f := newFolderFixture(t)
+	fid := sharedWithBob(t, f)
+	require.Equal(t, http.StatusCreated, postNote(t, f, fid, f.alice, "", map[string]string{"page.html": "<script>x</script>", "pic.png": "PNG"}).Code)
+	it := folderItems(t, f, fid, f.bob)[0]
+	nid := it["id"].(string)
+	ids := map[string]string{}
+	for _, x := range it["files"].([]any) {
+		fv := x.(map[string]any)
+		ids[fv["name"].(string)] = fv["id"].(string)
+	}
+	for id, fi := range fakeFiles {
+		if fi.Name == "pic.png" {
+			fakeFiles[id].MimeType = "image/png"
+		} else {
+			fakeFiles[id].MimeType = "text/html"
+		}
+	}
+	get := func(uid, file, query string) *httptest.ResponseRecorder {
+		return f.call(t, http.MethodGet, "/api/v1/folders/"+fid+"/notes/"+nid+"/files/"+file+query, "", uid)
+	}
+
+	w := get(f.bob, ids["page.html"], "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, "<script>x</script>", w.Body.String())
+	assert.Equal(t, "application/octet-stream", w.Header().Get("Content-Type"), "HTML is never rendered as a page")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+
+	w = get(f.alice, ids["pic.png"], "")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "image/png", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "inline")
+	assert.Contains(t, get(f.alice, ids["pic.png"], "?download=1").Header().Get("Content-Disposition"), "attachment")
+
+	assert.Equal(t, http.StatusNotFound, get(f.carol, ids["pic.png"], "").Code, "not a member")
+	assert.Equal(t, http.StatusNotFound, get(f.bob, model.NewId(), "").Code, "not a file of this note")
 }
