@@ -587,7 +587,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on', office_preview: 'on' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -626,7 +626,7 @@
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
-    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on', code: s.code_preview === 'on' });
+    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on', code: s.code_preview === 'on', office: s.office_preview === 'on' });
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     ReadReceipts.configure(s.read_receipts === 'on');
@@ -1352,6 +1352,9 @@
   // The parent fetches the text with the user's session and posts it once.
   const MdPreview = (() => {
     const KINDS = { md: 'markdown', markdown: 'markdown', mdx: 'markdown', csv: 'csv', tsv: 'csv', json: 'json' };
+    // Office files are read as bytes and parsed inside the frame (office.js).
+    const OFFICE = { xlsx: 'xlsx', docx: 'docx', pptx: 'pptx' };
+    const MAX_OFFICE_BYTES = 25 * 1024 * 1024;
     // Source files → Prism language (only languages bundled in vendor/prism.js).
     const CODE = {
       js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx', ts: 'typescript', mts: 'typescript', tsx: 'tsx',
@@ -1365,7 +1368,7 @@
     };
     const MAX_BYTES = 2 * 1024 * 1024;
     const DIR = () => `${basePath}/plugins/${PLUGIN_ID}/public/md-preview/`;
-    const enabled = { markdown: true, data: true, code: true };
+    const enabled = { markdown: true, data: true, code: true, office: true };
     let fontBytes = null;
 
     const extOf = fileInfo => {
@@ -1378,12 +1381,14 @@
     const kindOf = fileInfo => {
       const ext = extOf(fileInfo);
       if (ext === 'html' || ext === 'htm') return 'html';
+      if (OFFICE[ext]) return OFFICE[ext];
       return KINDS[ext] || (CODE[ext] ? 'code' : null);
     };
     const canPreview = fileInfo => {
       const kind = kindOf(fileInfo);
       if (kind === 'markdown') return enabled.markdown;
       if (kind === 'code' || kind === 'html') return enabled.code;
+      if (OFFICE[kind]) return enabled.office;
       return Boolean(kind) && enabled.data;
     };
 
@@ -1419,13 +1424,15 @@
       return fontBytes ? fontBytes.slice(0) : null;
     }
 
+    // Text for most kinds; an ArrayBuffer for Office files.
     async function loadText(fileInfo) {
-      if (fileInfo.size > MAX_BYTES) throw new Error('too-large');
+      const office = Boolean(OFFICE[kindOf(fileInfo)]);
+      if (fileInfo.size > (office ? MAX_OFFICE_BYTES : MAX_BYTES)) throw new Error('too-large');
       const res = await fetch(`${basePath}/api/v4/files/${encodeURIComponent(fileInfo.id)}`, {
         credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' }
       });
       if (!res.ok) throw new Error(String(res.status));
-      return res.text();
+      return office ? res.arrayBuffer() : res.text();
     }
 
     function Component(props) {
@@ -1446,7 +1453,8 @@
           sent = true; // one render per frame; never re-send the file
           try {
             const [md, font] = await data;
-            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', font ? [font] : []);
+            const transfer = [font, md instanceof ArrayBuffer ? md : null].filter(Boolean);
+            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', transfer);
           } catch (err) { /* error state already set */ }
         };
         window.addEventListener('message', onMessage);
@@ -1455,7 +1463,9 @@
 
       if (error) {
         return h('div', { className: 'mmrtl-md-error', dir: 'auto' }, error === 'too-large'
-          ? L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 2 MB). Download it instead.')
+          ? (OFFICE[kindOf(fileInfo)]
+            ? L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲۵ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 25 MB). Download it instead.')
+            : L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 2 MB). Download it instead.'))
           : L('بارگذاری فایل ممکن نشد.', 'The file could not be loaded.'));
       }
       return h('iframe', {
@@ -1484,7 +1494,7 @@
       registry.registerFilePreviewComponent(canPreview, Component);
     }
 
-    function configure({ markdown, data, code }) { enabled.markdown = markdown; enabled.data = data; enabled.code = code; }
+    function configure({ markdown, data, code, office }) { enabled.markdown = markdown; enabled.data = data; enabled.code = code; enabled.office = office !== false; }
 
     // A preview frame for Markdown text that's already in memory (no file fetch).
     function createFrame(md) {
@@ -3911,6 +3921,7 @@
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
             { title: 'پیش‌نمایش فایل‌های کد', settings: [radio('code_preview', 'پیش‌نمایش فایل‌های کد با Prism', 'فایل‌های کد (js، ts، py، cs، java، go، sql، yaml، sh، ps1، html، css، Dockerfile و…) با رنگ‌آمیزی، شماره خط و دکمهٔ Copy نمایش داده می‌شوند. خاموش: پیش‌نمایش خود Mattermost.', [['on', 'فعال (همهٔ فایل‌های کد)'], ['off', 'غیرفعال']])] },
+            { title: 'پیش‌نمایش فایل‌های Office', settings: [radio('office_preview', 'پیش‌نمایش Excel، Word و PowerPoint', 'محتوای فایل‌های xlsx (جدول هر برگه)، docx (متن، جدول و تصویر) و pptx (متن و تصویرهای هر اسلاید) در فریم ایزوله نمایش داده می‌شود. چیدمان دقیق Office نیست؛ ماکروها هرگز اجرا نمی‌شوند. خاموش: پیش‌نمایش خود Mattermost.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'چسباندن متن بلند به‌صورت فایل', settings: [radio('paste_as_file', 'پیشنهاد ارسال متن بلند به‌صورت فایل .md', 'بعد از چسباندن متن بلند (۱۰ خط یا ۱۰۰۰ کاراکتر به بالا) در کادر پیام، نواری پیشنهاد می‌دهد آن را به‌صورت پیوست .md (خام یا مرتب‌شده) بفرستید. متن‌های کوتاه و فایل‌ها دست نمی‌خورند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'زبان کد هنگام چسباندن', settings: [radio('code_paste', 'انتخاب زبان برای کدِ چسبانده‌شده', 'وقتی کد می‌چسبانید (یا داخل یک بلوک ``` بدون زبان)، نواری زبان را حدس می‌زند و اجازه می‌دهد آن را در بلوک کد با زبان درست قرار دهید (Mattermost آن را رنگ‌آمیزی می‌کند) یا کد بلند را به‌صورت فایل بفرستید.', [['on', 'فعال'], ['off', 'غیرفعال']])] },

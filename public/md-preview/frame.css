@@ -75,3 +75,23 @@ article.data-view { max-width: none; padding: 16px; }
 .html-panel[hidden] { display: none; }
 /* Pages are designed for a white canvas, so the preview keeps one even in dark mode. */
 .html-preview-frame { display: block; width: 100%; height: calc(100vh - 200px); min-height: 360px; border: 1px solid #303a49; border-radius: 8px; background: #fff; }
+
+/* Office previews */
+.office .office-note { opacity: .75; }
+.office-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; }
+.office-tab { padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.office-tab[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); font-weight: 600; }
+.office .docx { max-width: 900px; margin: 0 auto; line-height: 1.8; }
+.office .docx img { max-width: 100%; height: auto; }
+.office .docx table { margin: 1em 0; }
+.office .docx td, .office .docx th { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+.slides { display: flex; flex-direction: column; gap: 16px; max-width: 960px; margin: 0 auto; }
+.slide { position: relative; padding: 20px 24px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.slide h2 { margin: 0 0 12px; font-size: 1.35em; }
+.slide ul { margin: 0 0 8px; padding-inline-start: 22px; }
+.slide li { margin: 4px 0; }
+.slide-no { position: absolute; top: 8px; inset-inline-end: 12px; font-size: 12px; color: var(--muted); }
+.slide-images { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.slide-images img { max-width: 100%; max-height: 360px; border-radius: 6px; border: 1px solid var(--border); }
+.slide .muted { color: var(--muted); }
+.office-error { margin: 16px 0; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, #d24b4e 10%, transparent); }
