@@ -1995,7 +1995,7 @@
     const listeners = new Set(); // called after any change (sidebar refresh)
     let overlay = null;
     let box = null;
-    let postId = null;
+    let selection = []; // message IDs to add (from a message menu or multi-select)
     let rhs = null;     // { showRHSPlugin, hideRHSPlugin } when the right-hand panel is registered
     let host = null;    // the panel's element while it is open
     let pending = null; // view to render once the panel mounts
@@ -2167,6 +2167,32 @@
         .mmrtl-folders .msgfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
         .mmrtl-folders .msgfoot .added { flex: 1 1 auto; font-size: 11px; color: var(--mf-muted); }
         .mmrtl-folders .more { border: 0; background: transparent; padding: 4px 0 0; color: var(--link-color); cursor: pointer; font: inherit; font-size: 12px; }
+        .mmrtl-folders .msgcard.note { border-style: dashed; }
+        .mmrtl-folders .files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .mmrtl-folders .files .thumb { display: block; width: 96px; height: 96px; border-radius: 6px; overflow: hidden; border: 1px solid var(--mf-line); }
+        .mmrtl-folders .files .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .mmrtl-folders .files .file { display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--mf-line); border-radius: 6px; color: inherit; text-decoration: none; font-size: 13px; }
+        .mmrtl-folders .files .file:hover { background: var(--mf-soft); }
+        .mmrtl-folders .files .fname2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+        .mmrtl-folders .files .fsize { color: var(--mf-muted); font-size: 11px; white-space: nowrap; }
+        .mmrtl-folders .reactions { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+        .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--mf-line); border-radius: 12px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+        .mmrtl-folders .rchip.mine { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .1); color: var(--button-bg); }
+        .mmrtl-folders .rchip.add { opacity: .7; }
+        .mmrtl-folders .rchip:disabled { cursor: default; }
+        .mmrtl-folders .rpicker { display: flex; gap: 2px; padding: 4px; border: 1px solid var(--mf-line); border-radius: 8px; background: var(--center-channel-bg); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+        .mmrtl-folders .rpicker button { border: 0; background: transparent; font-size: 18px; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; }
+        .mmrtl-folders .rpicker button:hover { background: var(--mf-soft); }
+        .mmrtl-folders .rerr { font-size: 12px; color: var(--error-text); }
+        .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding: 12px; border: 1px solid var(--mf-line); border-radius: 8px; }
+        .mmrtl-folders .composer.drop { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .05); }
+        .mmrtl-folders .composer .section { margin: 0; }
+        .mmrtl-folders .composer textarea { height: auto; min-height: 72px; padding: 8px 12px; resize: vertical; }
+        .mmrtl-folders .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .mmrtl-folders .tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .mmrtl-folders .seg { display: inline-flex; border: 1px solid var(--mf-line); border-radius: 4px; overflow: hidden; }
+        .mmrtl-folders .seg button { height: 26px; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+        .mmrtl-folders .seg button[aria-checked="true"] { background: rgba(var(--button-bg-rgb), .12); color: var(--button-bg); font-weight: 600; }
         .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`;
       (doc.head || doc.documentElement).appendChild(st);
     }
@@ -2244,20 +2270,27 @@
     }
     function detach(node) { if (host === node) host = null; }
 
-    // From a message menu: postId is the message to add.
+    // From a message menu: id is the message to add.
     function open(id) {
-      postId = id || null;
+      selection = id ? [id] : [];
+      scope = null;
+      show(() => showList());
+    }
+
+    // Several messages chosen with multi-select.
+    function openMany(ids) {
+      selection = [...new Set(ids)];
       scope = null;
       show(() => showList());
     }
 
     function openFolder(id) {
-      postId = null;
+      selection = [];
       show(() => showFolder(id));
     }
 
     function openCreate() {
-      postId = null;
+      selection = [];
       scope = null;
       show(() => showCreate());
     }
@@ -2265,7 +2298,7 @@
     // From a conversation button: only the folders that belong to it.
     // DM → folders with that person; group message → folders with exactly its members.
     async function openForChannel(channel) {
-      postId = null;
+      selection = [];
       scope = null;
       const me = state().users.currentUserId;
       if (channel?.type === 'D') {
@@ -2335,7 +2368,11 @@
         b.append(bar);
         folders = folders.filter(scope.match);
       }
-      if (postId) b.append(el('div', { className: 'banner' }, L('پوشه‌ای را باز کنید تا پیام انتخاب‌شده را به آن اضافه کنید.', 'Open a folder to add the selected message to it.')));
+      if (selection.length) {
+        b.append(el('div', { className: 'banner' }, selection.length === 1
+          ? L('پوشه‌ای را باز کنید تا پیام انتخاب‌شده را به آن اضافه کنید.', 'Open a folder to add the selected message to it.')
+          : L(`پوشه‌ای را باز کنید تا ${selection.length} پیام انتخاب‌شده را به آن اضافه کنید.`, `Open a folder to add the ${selection.length} selected messages to it.`)));
+      }
 
       const invites = folders.filter(f => f.role === 'invitee');
       const mine = folders.filter(f => f.role !== 'invitee');
@@ -2610,6 +2647,292 @@
 
     const when = ms => new Date(ms).toLocaleString(isFa() ? 'fa-IR' : undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
+    // Emoji names Mattermost uses → the character. Anything else shows as :name:.
+    const EMOJI = {
+      '+1': '👍', thumbsup: '👍', '-1': '👎', thumbsdown: '👎', heart: '❤️', joy: '😂', smile: '😄', tada: '🎉',
+      eyes: '👀', white_check_mark: '✅', heavy_check_mark: '✔️', pray: '🙏', fire: '🔥', rocket: '🚀',
+      thinking_face: '🤔', ok_hand: '👌', clap: '👏', star: '⭐', warning: '⚠️', x: '❌', bulb: '💡', memo: '📝'
+    };
+    const QUICK_EMOJI = ['+1', 'heart', 'joy', 'tada', 'eyes', 'white_check_mark', 'pray', 'fire'];
+    const glyph = name => EMOJI[name] || `:${name}:`;
+
+    function humanSize(n) {
+      if (!n && n !== 0) return '';
+      const u = ['B', 'KB', 'MB', 'GB'];
+      let i = 0;
+      while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+      return `${n < 10 && i ? n.toFixed(1) : Math.round(n)} ${u[i]}`;
+    }
+
+    function fileIcon(ext) {
+      const e = String(ext || '').toLowerCase();
+      if (/^(pdf)$/.test(e)) return '📕';
+      if (/^(zip|rar|7z|gz|tar)$/.test(e)) return '🗜️';
+      if (/^(xls|xlsx|csv|ods)$/.test(e)) return '📊';
+      if (/^(doc|docx|odt|rtf|txt|md)$/.test(e)) return '📄';
+      if (/^(sql|js|ts|py|cs|java|go|sh|ps1|json|yml|yaml|xml|html|css)$/.test(e)) return '💻';
+      if (/^(mp4|mov|webm|mkv)$/.test(e)) return '🎬';
+      if (/^(mp3|wav|ogg|m4a)$/.test(e)) return '🎵';
+      return '📎';
+    }
+
+    // Attachments: images as thumbnails (open the preview), other files as a
+    // download chip. Mattermost serves them and checks channel access itself.
+    function attachmentList(files) {
+      const wrap = el('div', { className: 'files' });
+      for (const fi of files || []) {
+        const isImage = fi.has_preview_image || /^image\//.test(fi.mime_type || '');
+        if (isImage) {
+          const a = el('a', { className: 'thumb', href: V4(`/files/${encodeURIComponent(fi.id)}/preview`), target: '_blank', rel: 'noopener noreferrer', title: fi.name },
+            el('img', { src: V4(`/files/${encodeURIComponent(fi.id)}/thumbnail`), alt: fi.name, loading: 'lazy' }));
+          wrap.append(a);
+        } else {
+          const a = el('a', { className: 'file', href: V4(`/files/${encodeURIComponent(fi.id)}?download=1`), title: fi.name },
+            el('span', { className: 'ficon2', 'aria-hidden': 'true' }, fileIcon(fi.extension)),
+            el('span', { className: 'fname2', dir: 'auto' }, fi.name),
+            el('span', { className: 'fsize' }, humanSize(fi.size)));
+          a.setAttribute('download', fi.name);
+          wrap.append(a);
+        }
+      }
+      return wrap;
+    }
+
+    // Adds or removes the user's reaction. A saved conversation message uses
+    // Mattermost's own reactions (seen in the conversation too); a folder-only
+    // note keeps its reactions in the folder.
+    async function setReaction(folderId, it, name, add) {
+      const me = state().users.currentUserId;
+      if (it.kind === 'note') {
+        const data = add
+          ? await call('POST', `/${folderId}/notes/${it.id}/reactions`, { emoji_name: name })
+          : await call('DELETE', `/${folderId}/notes/${it.id}/reactions/${encodeURIComponent(name)}`);
+        return data.reactions || {};
+      }
+      const headers = { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrf() };
+      const res = add
+        ? await fetch(V4('/reactions'), { method: 'POST', credentials: 'include', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: me, post_id: it.post_id, emoji_name: name }) })
+        : await fetch(V4(`/users/${encodeURIComponent(me)}/posts/${encodeURIComponent(it.post_id)}/reactions/${encodeURIComponent(name)}`), { method: 'DELETE', credentials: 'include', headers });
+      if (!res.ok) throw new FolderApiError(res.status, res.status === 403 ? 'forbidden' : 'store_failed');
+      const next = { ...(it.reactions || {}) };
+      const users = (next[name] || []).filter(u => u !== me);
+      if (add) users.push(me);
+      if (users.length) next[name] = users; else delete next[name];
+      return next;
+    }
+
+    function reactionBar(folderId, it, canReact) {
+      const me = state().users.currentUserId;
+      const bar = el('div', { className: 'reactions' });
+      const err = el('span', { className: 'rerr', role: 'alert' });
+      let picker = null;
+      const render = () => {
+        const kids = [];
+        for (const [name, users] of Object.entries(it.reactions || {})) {
+          const mine = users.includes(me);
+          const chip = el('button', { type: 'button', className: `rchip${mine ? ' mine' : ''}`, title: users.map(nameOf).join('، ') },
+            el('span', { 'aria-hidden': 'true' }, glyph(name)), el('span', {}, String(users.length)));
+          chip.setAttribute('aria-pressed', String(mine));
+          chip.setAttribute('aria-label', `${name} ${users.length}`);
+          if (canReact) chip.onclick = () => toggle(name, !mine);
+          else chip.disabled = true;
+          kids.push(chip);
+        }
+        if (canReact) {
+          const plus = el('button', { type: 'button', className: 'rchip add', title: L('افزودن واکنش', 'Add reaction') }, '☺+');
+          plus.setAttribute('aria-label', L('افزودن واکنش', 'Add reaction'));
+          plus.onclick = () => {
+            if (picker) { picker.remove(); picker = null; return; }
+            picker = el('div', { className: 'rpicker', role: 'group' });
+            for (const name of QUICK_EMOJI) {
+              const b = el('button', { type: 'button', title: name }, glyph(name));
+              b.setAttribute('aria-label', name);
+              b.onclick = () => { picker?.remove(); picker = null; toggle(name, !(it.reactions?.[name] || []).includes(me)); };
+              picker.append(b);
+            }
+            bar.append(picker);
+          };
+          kids.push(plus);
+        }
+        kids.push(err);
+        bar.replaceChildren(...kids);
+        if (picker) bar.append(picker);
+      };
+      const toggle = async (name, add) => {
+        err.textContent = '';
+        try {
+          it.reactions = await setReaction(folderId, it, name, add);
+          render();
+        } catch (e) {
+          err.textContent = e instanceof FolderApiError ? (errorLabels()[e.code] || errorLabels().store_failed) : L('خطای شبکه.', 'Network error.');
+        }
+      };
+      render();
+      return bar;
+    }
+
+    function itemCard(f, folderId, it, active, act) {
+      const isNote = it.kind === 'note';
+      const where = isNote ? L('فقط در پوشه', 'Folder only') : channelLabel(it.channel_id);
+      const body = renderMessage(it.message);
+      const card = el('div', { className: `msgcard${isNote ? ' note' : ''}` },
+        el('div', { className: 'msghead' }, avatar(it.user_id || it.added_by, 'avatar lg'),
+          el('div', { className: 'grow' }, el('span', { className: 'who' }, nameOf(it.user_id || it.added_by)),
+            el('span', { className: 'where' }, [where, it.create_at ? when(it.create_at) : ''].filter(Boolean).join(' · ')))),
+        body);
+      const more = el('button', { type: 'button', className: 'more', hidden: true }, L('نمایش بیشتر', 'Show more'));
+      more.onclick = () => {
+        const collapsed = body.classList.toggle('clamp');
+        more.textContent = collapsed ? L('نمایش بیشتر', 'Show more') : L('نمایش کمتر', 'Show less');
+      };
+      card.append(more);
+      if (it.files && it.files.length) card.append(attachmentList(it.files));
+      card.append(reactionBar(folderId, it, active));
+
+      const foot = el('div', { className: 'msgfoot' }, el('span', { className: 'added' },
+        isNote ? '' : L(`افزوده‌شده توسط ${nameOf(it.added_by)} · ${when(it.added_at)}`, `Added by ${nameOf(it.added_by)} · ${when(it.added_at)}`)));
+      if (!isNote) {
+        const go = el('button', { type: 'button', className: 'btn small' }, L('رفتن به پیام', 'Go to message'));
+        go.onclick = () => goToPost(it.post_id);
+        foot.append(go);
+      }
+      if (it.message) {
+        const copy = el('button', { type: 'button', className: 'btn small' }, L('کپی', 'Copy'));
+        copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(it.message); copy.textContent = L('کپی شد ✓', 'Copied ✓'); } catch (e) { copy.textContent = L('کپی نشد', 'Copy failed'); }
+          setTimeout(() => { copy.textContent = L('کپی', 'Copy'); }, 1500);
+        };
+        foot.append(copy);
+      }
+      if (active) {
+        const rm = el('button', { type: 'button', className: 'btn small danger' }, isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove'));
+        rm.onclick = () => {
+          if (isNote && !confirmIn(L('این پیام فقط در پوشه است و برای همیشه حذف می‌شود. ادامه می‌دهید؟', 'This message exists only in the folder and will be deleted permanently. Continue?'))) return;
+          act(() => call('DELETE', `/${folderId}/items/${it.id}`), isNote ? L('پیام حذف شد.', 'Message deleted.') : L('پیام از پوشه حذف شد.', 'Message removed from the folder.'));
+        };
+        foot.append(rm);
+      }
+      card.append(foot);
+      requestAnimationFrame(() => {
+        if (body.scrollHeight > 240) { body.classList.add('clamp'); more.hidden = false; }
+      });
+      return card;
+    }
+
+    // Sends a multipart form (folder-only notes) and notifies listeners.
+    async function sendForm(url, form) {
+      const res = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrf() }, body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new FolderApiError(res.status, data.error || (res.status === 413 ? 'limit_reached' : 'store_failed'));
+      for (const fn of listeners) { try { fn(); } catch (e) { /* ignore */ } }
+      return data;
+    }
+
+    async function v4(method, path, body, isForm) {
+      const headers = { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': csrf() };
+      if (body && !isForm) headers['Content-Type'] = 'application/json';
+      const res = await fetch(V4(path), { method, credentials: 'include', headers, body: body ? (isForm ? body : JSON.stringify(body)) : undefined });
+      if (!res.ok) throw new FolderApiError(res.status, res.status === 413 ? 'limit_reached' : res.status === 403 ? 'forbidden' : 'store_failed');
+      return res.json();
+    }
+
+    // Composer at the bottom of a folder: text and files, sent only to the
+    // folder (default) or also to the folder's conversation.
+    function composer(f, folderId) {
+      const me = state().users.currentUserId;
+      const MAX_FILES = 10;
+      const files = [];
+      let mode = 'folder';
+      const wrap = el('div', { className: 'composer' });
+      const ta = el('textarea', { className: 'input', rows: 3, maxLength: 4000, dir: 'auto', placeholder: L('پیام یا توضیح بنویسید… (Ctrl+Enter برای ارسال)', 'Write a message… (Ctrl+Enter to send)') });
+      ta.setAttribute('aria-label', L('متن پیام', 'Message text'));
+      const chips = el('div', { className: 'people' });
+      const picker = el('input', { type: 'file', multiple: true, hidden: true });
+      const attach = el('button', { type: 'button', className: 'btn small' }, `📎 ${L('پیوست فایل', 'Attach files')}`);
+      attach.onclick = () => picker.click();
+      const err = el('div', {});
+      const hint = el('div', { className: 'hint' });
+      const send = el('button', { type: 'button', className: 'btn primary' }, L('ارسال', 'Send'));
+
+      const other = () => [...f.members].find(id => id !== me);
+      const modes = el('div', { className: 'seg', role: 'radiogroup' });
+      modes.setAttribute('aria-label', L('محل ارسال', 'Where to send'));
+      const modeBtn = (value, label) => {
+        const b = el('button', { type: 'button', role: 'radio' }, label);
+        b.onclick = () => { mode = value; sync(); };
+        b.dataset.value = value;
+        return b;
+      };
+      modes.append(modeBtn('folder', L('فقط در پوشه', 'Folder only')), modeBtn('conversation', L('در گفتگو هم', 'Also in conversation')));
+
+      function addFiles(list) {
+        for (const file of list) if (files.length < MAX_FILES) files.push(file);
+        sync();
+      }
+      picker.onchange = () => { addFiles(picker.files); picker.value = ''; };
+      ta.addEventListener('paste', e => {
+        const pasted = e.clipboardData && e.clipboardData.files;
+        if (pasted && pasted.length) { e.preventDefault(); addFiles(pasted); }
+      });
+      wrap.addEventListener('dragover', e => { e.preventDefault(); wrap.classList.add('drop'); });
+      wrap.addEventListener('dragleave', () => wrap.classList.remove('drop'));
+      wrap.addEventListener('drop', e => { e.preventDefault(); wrap.classList.remove('drop'); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
+      ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !send.disabled) { e.preventDefault(); send.click(); } });
+      ta.addEventListener('input', () => sync());
+
+      function sync() {
+        for (const b of modes.children) b.setAttribute('aria-checked', String(b.dataset.value === mode));
+        chips.replaceChildren(...files.map((file, i) => {
+          const x = el('button', { type: 'button', className: 'x', title: L('حذف', 'Remove') }, '✕');
+          x.setAttribute('aria-label', L(`حذف ${file.name}`, `Remove ${file.name}`));
+          x.onclick = () => { files.splice(i, 1); sync(); };
+          return el('span', { className: 'person' }, el('span', { 'aria-hidden': 'true' }, fileIcon(String(file.name).split('.').pop())), `${file.name} · ${humanSize(file.size)}`, x);
+        }));
+        const who = other();
+        hint.textContent = mode === 'folder'
+          ? L('فقط در همین پوشه نمایش داده می‌شود و در هیچ گفتگویی نیست.', 'Shown only in this folder, not in any conversation.')
+          : f.kind === 'group' ? L('در پیام گروهی اعضای پوشه هم فرستاده می‌شود.', 'Also sent to the group message of the folder’s members.')
+            : f.kind === 'shared' && who ? L(`در پیام مستقیم با ${nameOf(who)} هم فرستاده می‌شود.`, `Also sent in your direct message with ${nameOf(who)}.`)
+              : L('در گفتگو با خودتان هم فرستاده می‌شود (فقط شما می‌بینید).', 'Also sent to your conversation with yourself (only you see it).');
+        attach.disabled = files.length >= MAX_FILES;
+        send.disabled = !ta.value.trim() && !files.length;
+      }
+
+      send.onclick = async () => {
+        send.disabled = true;
+        err.replaceChildren();
+        const text = ta.value.trim();
+        try {
+          if (mode === 'folder') {
+            const form = new FormData();
+            form.append('text', text);
+            for (const file of files) form.append('files', file, file.name);
+            await sendForm(`${API()}/${folderId}/notes`, form);
+          } else {
+            const { channel_id: channelId } = await call('POST', `/${folderId}/conversation`);
+            let fileIds = [];
+            if (files.length) {
+              const form = new FormData();
+              form.append('channel_id', channelId);
+              for (const file of files) form.append('files', file, file.name);
+              fileIds = ((await v4('POST', '/files', form, true)).file_infos || []).map(x => x.id);
+            }
+            const post = await v4('POST', '/posts', { channel_id: channelId, message: text, file_ids: fileIds });
+            await call('POST', `/${folderId}/items`, { post_id: post.id });
+          }
+          await showFolder(folderId, mode === 'folder' ? L('در پوشه ذخیره شد.', 'Saved in the folder.') : L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
+        } catch (e) {
+          err.replaceChildren(errorNode(e));
+          send.disabled = false;
+        }
+      };
+
+      wrap.append(el('div', { className: 'section' }, L('ارسال در پوشه', 'Send to this folder')), ta, chips,
+        el('div', { className: 'row-between' }, el('div', { className: 'tools' }, attach, modes), send), hint, err, picker);
+      sync();
+      return wrap;
+    }
+
     // Folder view. notice/error show at the top after an action on this folder.
     async function showFolder(id, notice, error) {
       const back = () => showList();
@@ -2673,53 +2996,42 @@
       }
 
       const active = f.status === 'active';
-      if (postId && active && !items.some(i => i.post_id === postId)) {
-        const add = el('button', { type: 'button', className: 'btn primary block', style: 'margin-top:12px' }, `+ ${L('افزودن پیام انتخاب‌شده به این پوشه', 'Add the selected message to this folder')}`);
-        add.onclick = () => act(() => call('POST', `/${id}/items`, { post_id: postId }), L('پیام اضافه شد.', 'Message added.'));
+      const missing = selection.filter(pid => !items.some(i => i.post_id === pid));
+      if (missing.length && active) {
+        const add = el('button', { type: 'button', className: 'btn primary block', style: 'margin-top:12px' },
+          `+ ${missing.length === 1 ? L('افزودن پیام انتخاب‌شده به این پوشه', 'Add the selected message to this folder') : L(`افزودن ${missing.length} پیام انتخاب‌شده به این پوشه`, `Add the ${missing.length} selected messages to this folder`)}`);
+        add.onclick = async () => {
+          add.disabled = true;
+          let ok = 0;
+          let failed = 0;
+          let lastError = null;
+          for (const pid of missing) {
+            try { await call('POST', `/${id}/items`, { post_id: pid }); ok++; } catch (e) {
+              failed++;
+              lastError = e;
+              if (e.code === 'limit_reached') break;
+            }
+          }
+          selection = [];
+          if (!ok && lastError) return showFolder(id, undefined, lastError);
+          return showFolder(id, failed
+            ? L(`${ok} پیام اضافه شد؛ ${failed} پیام اضافه نشد.`, `${ok} added; ${failed} could not be added.`)
+            : ok === 1 ? L('پیام اضافه شد.', 'Message added.') : L(`${ok} پیام اضافه شد.`, `${ok} messages added.`));
+        };
         b.append(add);
       }
 
       b.append(el('div', { className: 'section' }, L(`پیام‌ها (${items.length})`, `Messages (${items.length})`)));
       if (!items.length) {
-        b.append(el('div', { className: 'empty' }, L('پیامی در این پوشه نیست. از منوی «…» هر پیام، «افزودن به پوشه…» را بزنید.', 'No messages yet. Use “Add to folder…” in a message’s “…” menu.')));
+        b.append(el('div', { className: 'empty' }, active
+          ? L('پیامی در این پوشه نیست. پایین همین صفحه پیام یا فایل بفرستید، یا از منوی «…» هر پیام «افزودن به پوشه…» را بزنید.', 'No messages yet. Send a message or file below, or use “Add to folder…” in a message’s “…” menu.')
+          : L('پیامی در این پوشه نیست.', 'No messages in this folder.')));
       }
       const msgs = el('div', { className: 'msgs' });
       const sorted = [...items].sort((a, c) => c.added_at - a.added_at);
-      for (const it of sorted) {
-        const body = renderMessage(it.message);
-        const card = el('div', { className: 'msgcard' },
-          el('div', { className: 'msghead' }, avatar(it.user_id || it.added_by, 'avatar lg'),
-            el('div', { className: 'grow' }, el('span', { className: 'who' }, nameOf(it.user_id || it.added_by)),
-              el('span', { className: 'where' }, [channelLabel(it.channel_id), it.create_at ? when(it.create_at) : ''].filter(Boolean).join(' · ')))),
-          body);
-        const more = el('button', { type: 'button', className: 'more', hidden: true }, L('نمایش بیشتر', 'Show more'));
-        more.onclick = () => {
-          const open = body.classList.toggle('clamp');
-          more.textContent = open ? L('نمایش بیشتر', 'Show more') : L('نمایش کمتر', 'Show less');
-        };
-        card.append(more);
-        const foot = el('div', { className: 'msgfoot' }, el('span', { className: 'added' }, L(`افزوده‌شده توسط ${nameOf(it.added_by)} · ${when(it.added_at)}`, `Added by ${nameOf(it.added_by)} · ${when(it.added_at)}`)));
-        const go = el('button', { type: 'button', className: 'btn small' }, L('رفتن به پیام', 'Go to message'));
-        go.onclick = () => goToPost(it.post_id);
-        const copy = el('button', { type: 'button', className: 'btn small' }, L('کپی', 'Copy'));
-        copy.onclick = async () => {
-          try { await navigator.clipboard.writeText(it.message || ''); copy.textContent = L('کپی شد ✓', 'Copied ✓'); } catch (e) { copy.textContent = L('کپی نشد', 'Copy failed'); }
-          setTimeout(() => { copy.textContent = L('کپی', 'Copy'); }, 1500);
-        };
-        foot.append(go, copy);
-        if (active) {
-          const rm = el('button', { type: 'button', className: 'btn small danger' }, L('حذف از پوشه', 'Remove'));
-          rm.onclick = () => act(() => call('DELETE', `/${id}/items/${it.post_id}`), L('پیام از پوشه حذف شد.', 'Message removed from the folder.'));
-          foot.append(rm);
-        }
-        card.append(foot);
-        msgs.append(card);
-        // Collapse long messages once the card is laid out.
-        requestAnimationFrame(() => {
-          if (body.scrollHeight > 240) { body.classList.add('clamp'); more.hidden = false; }
-        });
-      }
+      for (const it of sorted) msgs.append(itemCard(f, id, it, active, act));
       b.append(msgs);
+      if (active) b.append(composer(f, id));
 
       const shared = f.kind === 'shared' || f.kind === 'group';
       const footer = el('div', { className: 'footer' });
@@ -2744,12 +3056,118 @@
     }
 
     return {
-      open, openFolder, openCreate, openForChannel, close, attach, detach,
+      open, openMany, openFolder, openCreate, openForChannel, close, attach, detach,
       setRhs: r => { rhs = r; },
       list: () => call('GET'),
       onChange: fn => listeners.add(fn),
       loadNames, nameOf, kindLabels, splitFences
     };
+  })();
+
+  // ── Multi-select: tick several messages in the open conversation, then add
+  // them all to a folder. Checkboxes are drawn only while the mode is on.
+  const Selection = (() => {
+    const picked = new Set();
+    let on = false;
+    let bar = null;
+    let observer = null;
+    const POSTS = 'div.post[id^="post_"]:not(.post--system)';
+
+    function injectCSS() {
+      if (document.getElementById('mmrtl-sel-style')) return;
+      const st = document.createElement('style');
+      st.id = 'mmrtl-sel-style';
+      st.textContent = `
+        html.mmrtl-selecting ${POSTS} { position: relative; }
+        .mmrtl-sel { position: absolute; top: 10px; inset-inline-start: 6px; z-index: 6; width: 20px; height: 20px; padding: 0; border-radius: 4px; border: 2px solid rgba(var(--center-channel-color-rgb), .45); background: var(--center-channel-bg); color: var(--button-color); font-size: 13px; line-height: 16px; cursor: pointer; }
+        .mmrtl-sel[aria-checked="true"] { background: var(--button-bg); border-color: var(--button-bg); }
+        .mmrtl-selected { background: rgba(var(--button-bg-rgb), .08) !important; }
+        .mmrtl-selbar { position: fixed; z-index: 2147482998; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: var(--center-channel-bg); color: var(--center-channel-color); border: 1px solid rgba(var(--center-channel-color-rgb), .16); box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 14px; }
+        .mmrtl-selbar button { height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid rgba(var(--center-channel-color-rgb), .16); background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+        .mmrtl-selbar button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
+        .mmrtl-selbar button:disabled { opacity: .45; cursor: default; }`;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    function setPicked(post, id, value) {
+      if (value) picked.add(id); else picked.delete(id);
+      post.classList.toggle('mmrtl-selected', value);
+      const box = post.querySelector(':scope > .mmrtl-sel');
+      if (box) { box.setAttribute('aria-checked', String(value)); box.textContent = value ? '✓' : ''; }
+      renderBar();
+    }
+
+    function decorate() {
+      if (!on) return;
+      for (const post of document.querySelectorAll(POSTS)) {
+        const id = post.id.slice(5);
+        if (!/^[a-z0-9]{26}$/.test(id) || post.querySelector(':scope > .mmrtl-sel')) continue;
+        const box = document.createElement('button');
+        box.type = 'button';
+        box.className = 'mmrtl-sel';
+        box.setAttribute('role', 'checkbox');
+        box.setAttribute('aria-label', L('انتخاب پیام', 'Select message'));
+        box.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); setPicked(post, id, !picked.has(id)); });
+        post.prepend(box);
+        setPicked(post, id, picked.has(id));
+      }
+    }
+
+    function renderBar() {
+      if (!on) return;
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'mmrtl-selbar';
+        bar.setAttribute('role', 'toolbar');
+        document.body.append(bar);
+      }
+      bar.dir = isFa() ? 'rtl' : 'ltr';
+      const count = document.createElement('span');
+      count.textContent = L(`${picked.size} پیام انتخاب شد`, `${picked.size} selected`);
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'primary';
+      add.textContent = L('افزودن به پوشه…', 'Add to folder…');
+      add.disabled = !picked.size;
+      add.onclick = () => { const ids = [...picked]; stop(); Folders.openMany(ids); };
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = L('لغو', 'Cancel');
+      cancel.onclick = stop;
+      bar.replaceChildren(count, add, cancel);
+    }
+
+    function onKey(e) { if (e.key === 'Escape' && on) stop(); }
+
+    function start(firstId) {
+      injectCSS();
+      if (!on) {
+        on = true;
+        picked.clear();
+        document.documentElement.classList.add('mmrtl-selecting');
+        observer = new MutationObserver(() => decorate());
+        observer.observe(document.body, { childList: true, subtree: true });
+        document.addEventListener('keydown', onKey, true);
+      }
+      if (firstId) picked.add(firstId);
+      decorate();
+      renderBar();
+    }
+
+    function stop() {
+      on = false;
+      picked.clear();
+      observer?.disconnect();
+      observer = null;
+      document.removeEventListener('keydown', onKey, true);
+      document.documentElement.classList.remove('mmrtl-selecting');
+      for (const n of document.querySelectorAll('.mmrtl-sel')) n.remove();
+      for (const n of document.querySelectorAll('.mmrtl-selected')) n.classList.remove('mmrtl-selected');
+      bar?.remove();
+      bar = null;
+    }
+
+    return { start, stop };
   })();
 
   // ── «پوشه‌ها» section at the top of the left sidebar. Lists the user's
@@ -3419,12 +3837,21 @@
         }
       }).catch(() => { /* folders off or unreachable: menu entry only */ });
       const FoldersLabel = () => L('افزودن به پوشه…', 'Add to folder…');
+      const SelectLabel = () => L('انتخاب چند پیام برای پوشه…', 'Select messages for a folder…');
       registry.registerPostDropdownMenuAction(
         React ? React.createElement(FoldersLabel) : FoldersLabel(),
         postId => Folders.open(postId),
         postId => {
           const post = store.getState().entities.posts.posts[postId];
-          return Boolean(post?.message) && !(post.type || '').startsWith('system_');
+          return Boolean(post && (post.message || post.file_ids?.length)) && !(post.type || '').startsWith('system_');
+        }
+      );
+      registry.registerPostDropdownMenuAction(
+        React ? React.createElement(SelectLabel) : SelectLabel(),
+        postId => Selection.start(postId),
+        postId => {
+          const post = store.getState().entities.posts.posts[postId];
+          return Boolean(post) && !(post.type || '').startsWith('system_');
         }
       );
       applySettings();
