@@ -5,7 +5,9 @@
   'use strict';
 
   const PLUGIN_ID = 'com.github.sysman2007.mattermost-rtl';
-  const PREF_CATEGORY = `pp_${PLUGIN_ID}`;
+  // Mattermost stores plugin user settings under `pp_<plugin id>` cut to 32
+  // characters (the preference category limit).
+  const PREF_CATEGORY = `pp_${PLUGIN_ID}`.slice(0, 32);
   let store = null;
 
   // UI language follows the user's Mattermost language (Settings → Display → Language).
@@ -587,7 +589,7 @@
 
 
   // ── Settings: per-user preferences from Settings → Mattermost RTL (defaults below).
-  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on' };
+  const DEFAULTS = { bidi: 'smart', hover: 'on', page_dir: 'auto', fa_font: 'vazirmatn', en_font: 'site-default', font_scope: 'all', font_size: 'site-default', text_color: 'site-default', sidebar_toggle: 'on', timestamp: 'full', fa_fix: 'on', context_menu: 'on', md_preview: 'on', data_preview: 'on', md_export: 'on', read_receipts: 'on', paste_as_file: 'on', code_preview: 'on', code_paste: 'on', office_preview: 'on', reply_click: 'off', folders_view: 'panel' };
   let last = '';
   let sidebarOn = false;
   let mdExportOn = true;
@@ -626,10 +628,12 @@
     Stamps.configure(s.timestamp === 'full');
     FaFix.configure(s.fa_fix === 'on');
     ContextMenu.configure(s.context_menu === 'on');
-    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on', code: s.code_preview === 'on' });
+    MdPreview.configure({ markdown: s.md_preview === 'on', data: s.data_preview === 'on', code: s.code_preview === 'on', office: s.office_preview === 'on' });
     mdExportOn = s.md_export === 'on';
     Bidi.setMarkdownAction(mdExportOn ? MdExport.open : null);
     ReadReceipts.configure(s.read_receipts === 'on');
+    ReplyClick.configure(s.reply_click);
+    Folders.configure({ page: s.folders_view === 'page' });
     PasteAsFile.configure(s.paste_as_file === 'on', s.code_paste === 'on');
     applyCodeBlocksLTR();
   }
@@ -1297,6 +1301,62 @@
     return { configure, placeMenu };
   })();
 
+  // Opens a message's reply thread on a single or double click (user setting).
+  // It presses the message's own reply button, so Mattermost opens the thread.
+  const ReplyClick = (() => {
+    let mode = 'off';
+    const SKIP = 'a, button, input, textarea, select, label, img, video, audio, canvas, pre, code, [contenteditable="true"], [role="button"], ' +
+      '.post-menu, .post__header, .post-reaction-list, .post-image, .file-preview, .file-attachment, .attachment, .emoticon, .post-preview, .mmrtl-cm-quick';
+    const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+
+    // The center-channel message ID for a click that should open the thread, or null.
+    function postIdFor(e, dbl) {
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return null;
+      const post = e.target.closest?.('.post');
+      if (!post || !/^post_[a-z0-9]+$/.test(post.id) || post.classList.contains('post--system')) return null;
+      if (e.target.closest(SKIP) || post.querySelector('textarea')) return null;
+      if (!dbl) {
+        const sel = window.getSelection?.();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return null;
+      }
+      return post.id.slice(5);
+    }
+
+    // Presses the reply button of a message in the center channel; the hover
+    // bar is rendered on hover, so the message is hovered first if needed.
+    async function openThread(pid, frames = 20) {
+      for (let i = 0; i < frames; i++) {
+        const btn = document.getElementById(`CENTER_commentIcon_${pid}`);
+        if (btn) { btn.click(); return true; }
+        const post = document.getElementById(`post_${pid}`);
+        if (post) for (const type of ['mouseover', 'mouseenter', 'mousemove']) post.dispatchEvent(new MouseEvent(type, { bubbles: type !== 'mouseenter' }));
+        await nextFrame();
+      }
+      return false;
+    }
+
+    function onClick(e) {
+      const pid = mode === 'single' && postIdFor(e, false);
+      if (pid) openThread(pid, 4);
+    }
+    function onDblClick(e) {
+      const pid = mode === 'double' && postIdFor(e, true);
+      if (!pid) return;
+      window.getSelection?.()?.removeAllRanges();
+      openThread(pid, 4);
+    }
+
+    function configure(value) {
+      const next = value === 'single' || value === 'double' ? value : 'off';
+      if (next === mode) return;
+      if (mode === 'off') { document.addEventListener('click', onClick); document.addEventListener('dblclick', onDblClick); }
+      mode = next;
+      if (mode === 'off') { document.removeEventListener('click', onClick); document.removeEventListener('dblclick', onDblClick); }
+    }
+
+    return { configure, openThread };
+  })();
+
   const ResizeFlip = (() => {
     const CURSORS = new Set(['col-resize', 'ew-resize', 'e-resize', 'w-resize']);
     const DOWN = ['mousedown', 'pointerdown'];
@@ -1352,6 +1412,9 @@
   // The parent fetches the text with the user's session and posts it once.
   const MdPreview = (() => {
     const KINDS = { md: 'markdown', markdown: 'markdown', mdx: 'markdown', csv: 'csv', tsv: 'csv', json: 'json' };
+    // Office files are read as bytes and parsed inside the frame (office.js).
+    const OFFICE = { xlsx: 'xlsx', docx: 'docx', pptx: 'pptx' };
+    const MAX_OFFICE_BYTES = 25 * 1024 * 1024;
     // Source files → Prism language (only languages bundled in vendor/prism.js).
     const CODE = {
       js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx', ts: 'typescript', mts: 'typescript', tsx: 'tsx',
@@ -1365,7 +1428,7 @@
     };
     const MAX_BYTES = 2 * 1024 * 1024;
     const DIR = () => `${basePath}/plugins/${PLUGIN_ID}/public/md-preview/`;
-    const enabled = { markdown: true, data: true, code: true };
+    const enabled = { markdown: true, data: true, code: true, office: true };
     let fontBytes = null;
 
     const extOf = fileInfo => {
@@ -1378,12 +1441,14 @@
     const kindOf = fileInfo => {
       const ext = extOf(fileInfo);
       if (ext === 'html' || ext === 'htm') return 'html';
+      if (OFFICE[ext]) return OFFICE[ext];
       return KINDS[ext] || (CODE[ext] ? 'code' : null);
     };
     const canPreview = fileInfo => {
       const kind = kindOf(fileInfo);
       if (kind === 'markdown') return enabled.markdown;
       if (kind === 'code' || kind === 'html') return enabled.code;
+      if (OFFICE[kind]) return enabled.office;
       return Boolean(kind) && enabled.data;
     };
 
@@ -1419,13 +1484,15 @@
       return fontBytes ? fontBytes.slice(0) : null;
     }
 
+    // Text for most kinds; an ArrayBuffer for Office files.
     async function loadText(fileInfo) {
-      if (fileInfo.size > MAX_BYTES) throw new Error('too-large');
+      const office = Boolean(OFFICE[kindOf(fileInfo)]);
+      if (fileInfo.size > (office ? MAX_OFFICE_BYTES : MAX_BYTES)) throw new Error('too-large');
       const res = await fetch(`${basePath}/api/v4/files/${encodeURIComponent(fileInfo.id)}`, {
         credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' }
       });
       if (!res.ok) throw new Error(String(res.status));
-      return res.text();
+      return office ? res.arrayBuffer() : res.text();
     }
 
     function Component(props) {
@@ -1446,7 +1513,8 @@
           sent = true; // one render per frame; never re-send the file
           try {
             const [md, font] = await data;
-            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', font ? [font] : []);
+            const transfer = [font, md instanceof ArrayBuffer ? md : null].filter(Boolean);
+            if (alive) win.postMessage({ type: 'mmrtl-md-render', md, kind: kindOf(fileInfo), ext: fileInfo.extension, lang: CODE[extOf(fileInfo)], name: fileInfo.name, theme: theme(), font }, '*', transfer);
           } catch (err) { /* error state already set */ }
         };
         window.addEventListener('message', onMessage);
@@ -1455,7 +1523,9 @@
 
       if (error) {
         return h('div', { className: 'mmrtl-md-error', dir: 'auto' }, error === 'too-large'
-          ? L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 2 MB). Download it instead.')
+          ? (OFFICE[kindOf(fileInfo)]
+            ? L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲۵ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 25 MB). Download it instead.')
+            : L('این فایل برای پیش‌نمایش بزرگ است (بیش از ۲ مگابایت). آن را دانلود کنید.', 'This file is too large to preview (over 2 MB). Download it instead.'))
           : L('بارگذاری فایل ممکن نشد.', 'The file could not be loaded.'));
       }
       return h('iframe', {
@@ -1484,7 +1554,7 @@
       registry.registerFilePreviewComponent(canPreview, Component);
     }
 
-    function configure({ markdown, data, code }) { enabled.markdown = markdown; enabled.data = data; enabled.code = code; }
+    function configure({ markdown, data, code, office }) { enabled.markdown = markdown; enabled.data = data; enabled.code = code; enabled.office = office !== false; }
 
     // A preview frame for Markdown text that's already in memory (no file fetch).
     function createFrame(md) {
@@ -1988,6 +2058,21 @@
   // ── Shared message folders («پوشه‌ها»). Talks to /api/v1/folders; the server
   // decides everything (membership, approvals, limits). A 404 with code
   // "disabled" means the admin hasn't turned the feature on.
+  // Inserts or refreshes a <style> by id. version changes on every release, so an
+  // upgraded plugin replaces the old rules even if the page was not reloaded.
+  const STYLE_VERSION = '2.8.0';
+  function upsertStyle(doc, id, css) {
+    let st = doc.getElementById(id);
+    if (st && st.dataset.v === STYLE_VERSION) return;
+    if (!st) {
+      st = doc.createElement('style');
+      st.id = id;
+      (doc.head || doc.documentElement).appendChild(st);
+    }
+    st.dataset.v = STYLE_VERSION;
+    st.textContent = css;
+  }
+
   const Folders = (() => {
     const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/folders`;
     const V4 = path => `${basePath}/api/v4${path}`;
@@ -1997,9 +2082,21 @@
     let box = null;
     let selection = []; // message IDs to add (from a message menu or multi-select)
     let rhs = null;     // { showRHSPlugin, hideRHSPlugin } when the right-hand panel is registered
-    let host = null;    // the panel's element while it is open
+    let host = null;    // the panel's (or page's) element while it is open
+    let hostKind = null; // 'rhs' or 'page'
+    let pageMode = false; // user setting: open folders in the center area
+    let pageRoute = false; // the center-area route is registered
+    let pop = null;     // open ⋮ / right-click menu
     let pending = null; // view to render once the panel mounts
     let scope = null;   // { label, match(folder) } when opened from a conversation header
+    // Where the panel component should portal Mattermost's editor (or null).
+    let editorSlot = null;
+    const editorSubs = new Set();
+    function setEditor(slot) {
+      if (slot === editorSlot) return;
+      editorSlot = slot;
+      for (const fn of editorSubs) { try { fn(slot); } catch (e) { /* ignore */ } }
+    }
 
     class FolderApiError extends Error {
       constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -2088,16 +2185,25 @@
     // Styles go into the document the view is rendered in: the main window, or
     // the separate window when the user pops the right-hand panel out.
     function injectCSS(doc = document) {
-      if (doc.getElementById('mmrtl-folders-style')) return;
-      const st = doc.createElement('style');
-      st.id = 'mmrtl-folders-style';
-      st.textContent = `
+      upsertStyle(doc, 'mmrtl-folders-style', `
         .mmrtl-folders { --mf-line: rgba(var(--center-channel-color-rgb), .12); --mf-soft: rgba(var(--center-channel-color-rgb), .05); --mf-muted: rgba(var(--center-channel-color-rgb), .64); color: var(--center-channel-color); font-size: 14px; line-height: 1.45; }
         .mmrtl-folders.overlay { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
         .mmrtl-folders .box { overflow: auto; padding: 16px 20px 20px; border-radius: 12px; background: var(--center-channel-bg); }
         .mmrtl-folders.overlay .box { width: min(560px, 94vw); max-height: 86vh; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
         .mmrtl-folders.rhs { height: 100%; overflow: auto; background: var(--center-channel-bg); }
         .mmrtl-folders.rhs .box { padding: 12px 16px 20px; border-radius: 0; }
+        .mmrtl-folders.page { grid-column: 1 / span 2; grid-row: 1 / -1; min-width: 0; height: 100%; width: 100%; overflow: auto; background: var(--center-channel-bg); }
+        .mmrtl-folders.page .box { max-width: 920px; margin: 0 auto; padding: 16px 24px 32px; border-radius: 0; }
+        .mmrtl-folders.fmenu { position: fixed; z-index: 2147483004; min-width: 190px; max-width: 300px; padding: 6px 0; border: 1px solid var(--mf-line); border-radius: 8px; background: var(--center-channel-bg); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+        .mmrtl-folders.fmenu button { display: block; width: 100%; padding: 8px 16px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+        .mmrtl-folders.fmenu button:hover, .mmrtl-folders.fmenu button:focus-visible { background: var(--mf-soft); outline: none; }
+        .mmrtl-folders.fmenu button.danger { color: var(--error-text, #d24b4e); }
+        .mmrtl-folders .kebab { flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: var(--mf-muted); font-size: 18px; line-height: 1; cursor: pointer; }
+        .mmrtl-folders .kebab:hover, .mmrtl-folders .kebab:focus-visible, .mmrtl-folders .kebab[aria-expanded="true"] { background: var(--mf-soft); color: inherit; }
+        .mmrtl-folders .msgcard { position: relative; }
+        .mmrtl-folders .msgcard > .msghead { padding-inline-end: 28px; }
+        .mmrtl-folders .msgcard > .kebab { position: absolute; top: 6px; inset-inline-end: 6px; opacity: 0; }
+        .mmrtl-folders .msgcard:hover > .kebab, .mmrtl-folders .msgcard > .kebab:focus-visible { opacity: 1; }
         .mmrtl-folders .top { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
         .mmrtl-folders .top h3 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mmrtl-folders .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid var(--mf-line); background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
@@ -2176,15 +2282,40 @@
         .mmrtl-folders .files .fname2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
         .mmrtl-folders .files .fsize { color: var(--mf-muted); font-size: 11px; white-space: nowrap; }
         .mmrtl-folders .reactions { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
-        .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--mf-line); border-radius: 12px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
-        .mmrtl-folders .rchip.mine { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .1); color: var(--button-bg); }
-        .mmrtl-folders .rchip.add { opacity: .7; }
+        .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .72); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .mmrtl-folders .rchip:hover { background: rgba(var(--center-channel-color-rgb), .16); }
+        .mmrtl-folders .rchip.mine { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .08); color: var(--button-bg); }
+        .mmrtl-folders .rchip.add { width: 28px; justify-content: center; background: transparent; font-size: 16px; color: rgba(var(--center-channel-color-rgb), .56); }
+        .mmrtl-folders .rchip.add:hover { background: rgba(var(--center-channel-color-rgb), .08); }
         .mmrtl-folders .rchip:disabled { cursor: default; }
         .mmrtl-folders .rpicker { display: flex; gap: 2px; padding: 4px; border: 1px solid var(--mf-line); border-radius: 8px; background: var(--center-channel-bg); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
         .mmrtl-folders .rpicker button { border: 0; background: transparent; font-size: 18px; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; }
         .mmrtl-folders .rpicker button:hover { background: var(--mf-soft); }
         .mmrtl-folders .rerr { font-size: 12px; color: var(--error-text); }
-        .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding: 12px; border: 1px solid var(--mf-line); border-radius: 8px; }
+        .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 6px; }
+        .mmrtl-folders .composer-head { display: flex; align-items: center; justify-content: flex-start; }
+        .mmrtl-folders .mm-editor { min-height: 48px; }
+        .mmrtl-folders .icon-fallback { display: none; }
+        .mmrtl-folders .mmbox { position: relative; display: flex; flex-direction: column; border: 1px solid rgba(var(--center-channel-color-rgb), .16); border-radius: 4px; background: var(--center-channel-bg); }
+        .mmrtl-folders .mmbox:focus-within { border-color: rgba(var(--center-channel-color-rgb), .32); box-shadow: inset 0 0 0 1px rgba(var(--center-channel-color-rgb), .16); }
+        .mmrtl-folders .mmbox.drop { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .04); }
+        .mmrtl-folders .mmbox-text { min-height: 44px; max-height: 220px; padding: 12px 16px 6px; border: 0; outline: none; resize: none !important; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 20px; }
+        .mmrtl-folders .mmbox-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px; }
+        .mmrtl-folders .mmbox-files:empty { display: none; }
+        .mmrtl-folders .mmbox-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 10px; border: 1px solid var(--mf-line); border-radius: 4px; font-size: 12px; }
+        .mmrtl-folders .mmbox-chip .n { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-folders .mmbox-chip .s { color: var(--mf-muted); }
+        .mmrtl-folders .mmbox-chip .x { border: 0; background: transparent; color: inherit; opacity: .6; cursor: pointer; font: inherit; }
+        .mmrtl-folders .mmbox-bar { display: flex; align-items: center; gap: 2px; padding: 4px 8px 6px; }
+        .mmrtl-folders .mmbox-bar .grow { flex: 1 1 auto; }
+        .mmrtl-folders .mmbox-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: rgba(var(--center-channel-color-rgb), .64); font-size: 18px; cursor: pointer; }
+        .mmrtl-folders .mmbox-btn:hover { background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .8); }
+        .mmrtl-folders .mmbox-btn:disabled { opacity: .4; cursor: default; }
+        .mmrtl-folders .mmbox-send { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: var(--button-bg); color: var(--button-color); font-size: 18px; cursor: pointer; }
+        .mmrtl-folders .mmbox-send:disabled { background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .32); cursor: default; }
+        .mmrtl-folders [dir="rtl"] .mmbox-send .icon, .mmrtl-folders .box[dir="rtl"] .mmbox-send .icon { transform: scaleX(-1); }
+        .mmrtl-folders .mmbox-emoji { position: absolute; bottom: 44px; inset-inline-start: 8px; z-index: 5; flex-wrap: wrap; max-width: 260px; }
+        .mmrtl-folders .jump { position: sticky; bottom: 12px; z-index: 4; display: block; margin: 10px auto 0; height: 32px; padding: 0 16px; border: 0; border-radius: 16px; background: var(--button-bg); color: var(--button-color); font: inherit; font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.2); cursor: pointer; }
         .mmrtl-folders .composer.drop { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .05); }
         .mmrtl-folders .composer .section { margin: 0; }
         .mmrtl-folders .composer textarea { height: auto; min-height: 72px; padding: 8px 12px; resize: vertical; }
@@ -2193,8 +2324,7 @@
         .mmrtl-folders .seg { display: inline-flex; border: 1px solid var(--mf-line); border-radius: 4px; overflow: hidden; }
         .mmrtl-folders .seg button { height: 26px; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
         .mmrtl-folders .seg button[aria-checked="true"] { background: rgba(var(--button-bg-rgb), .12); color: var(--button-bg); font-weight: 600; }
-        .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`;
-      (doc.head || doc.documentElement).appendChild(st);
+        .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`);
     }
 
     const KIND_ICON = { personal: '📁', contact: '👤', shared: '👥', group: '👪' };
@@ -2211,6 +2341,12 @@
     function onKey(e) { if (e.key === 'Escape' && overlay) { e.stopPropagation(); close(); } }
 
     function close() {
+      if (host && hostKind === 'page') {
+        const history = window.WebappUtils && window.WebappUtils.browserHistory;
+        if (history && typeof history.goBack === 'function' && window.history.length > 1) history.goBack();
+        else { const t = currentTeam(); if (t) navigate(`/${t.name}`); }
+        return;
+      }
       if (host && rhs) {
         store.dispatch(rhs.hideRHSPlugin);
         return;
@@ -2223,6 +2359,7 @@
 
     // Starts a new view; back (optional) adds a back button.
     function dialog(title, back) {
+      setEditor(null);
       box = el('div', { className: 'box', role: 'dialog' });
       box.setAttribute('aria-modal', 'true');
       box.dir = isFa() ? 'rtl' : 'ltr';
@@ -2233,7 +2370,7 @@
         top.append(b);
       }
       top.append(el('h3', {}, title));
-      if (!host) top.append(el('button', { type: 'button', className: 'btn icon-btn', title: L('بستن', 'Close'), onclick: close }, '✕'));
+      if (!host || hostKind === 'page') top.append(el('button', { type: 'button', className: 'btn icon-btn', title: L('بستن', 'Close'), onclick: close }, '✕'));
       box.append(top);
       if (host) {
         host.replaceChildren(box);
@@ -2252,6 +2389,13 @@
     // Renders a view in the right-hand panel (opening it), or in the overlay.
     function show(view) {
       injectCSS();
+      const t = pageMode && pageRoute && currentTeam();
+      if (t) {
+        if (host && hostKind === 'page') { view(); return; }
+        pending = view;
+        navigate(`/${t.name}/${PLUGIN_ID}/folders`);
+        return;
+      }
       if (rhs && store) {
         if (host) view(); else pending = view;
         store.dispatch(rhs.showRHSPlugin);
@@ -2261,14 +2405,59 @@
     }
 
     // The panel component calls these when it mounts / unmounts.
-    function attach(node) {
+    function attach(node, kind = 'rhs') {
       injectCSS(node.ownerDocument);
       host = node;
+      hostKind = kind;
       const view = pending || (() => showList());
       pending = null;
       view();
     }
-    function detach(node) { if (host === node) host = null; }
+    function detach(node) { if (host === node) { host = null; hostKind = null; closePop(); } }
+
+    const currentTeam = () => { const e = state(); return e.teams?.teams?.[e.teams?.currentTeamId] || null; };
+    function navigate(path) {
+      const history = window.WebappUtils && window.WebappUtils.browserHistory;
+      if (history && typeof history.push === 'function') history.push(path);
+      else location.assign(`${basePath}${path}`);
+    }
+
+    // A small menu (⋮ button or right-click) at (x, y). items: { label, run, danger } or null.
+    function closePop() {
+      if (!pop) return;
+      const { node, off } = pop;
+      pop = null;
+      off();
+      node.remove();
+    }
+    function popMenu(x, y, items) {
+      closePop();
+      const doc = (host && host.ownerDocument) || document;
+      const win = doc.defaultView || window;
+      injectCSS(doc);
+      const node = el('div', { className: 'mmrtl-folders fmenu', role: 'menu' });
+      node.dir = isFa() ? 'rtl' : 'ltr';
+      for (const it of items.filter(Boolean)) {
+        const b = el('button', { type: 'button', role: 'menuitem', className: it.danger ? 'danger' : '' }, it.label);
+        b.onclick = () => { closePop(); it.run(); };
+        node.append(b);
+      }
+      doc.body.append(node);
+      const at = ContextMenu.placeMenu(x, y, node.offsetWidth, node.offsetHeight, win.innerWidth, win.innerHeight, node.dir === 'rtl');
+      node.style.left = `${at.left}px`;
+      node.style.top = `${at.top}px`;
+      const outside = e => { if (!node.contains(e.target)) closePop(); };
+      const key = e => { if (e.key === 'Escape') { e.stopPropagation(); closePop(); } };
+      doc.addEventListener('mousedown', outside, true);
+      doc.addEventListener('keydown', key, true);
+      win.addEventListener('blur', closePop);
+      pop = { node, off: () => { doc.removeEventListener('mousedown', outside, true); doc.removeEventListener('keydown', key, true); win.removeEventListener('blur', closePop); } };
+      node.querySelector('button')?.focus();
+    }
+    const menuAt = (btn, items) => {
+      const r = btn.getBoundingClientRect();
+      popMenu(isFa() ? r.right : r.left, r.bottom + 2, items);
+    };
 
     // From a message menu: id is the message to add.
     function open(id) {
@@ -2739,7 +2928,7 @@
           kids.push(chip);
         }
         if (canReact) {
-          const plus = el('button', { type: 'button', className: 'rchip add', title: L('افزودن واکنش', 'Add reaction') }, '☺+');
+          const plus = el('button', { type: 'button', className: 'rchip add', title: L('افزودن واکنش', 'Add reaction') }, icon('icon-emoticon-plus-outline'));
           plus.setAttribute('aria-label', L('افزودن واکنش', 'Add reaction'));
           plus.onclick = () => {
             if (picker) { picker.remove(); picker = null; return; }
@@ -2770,6 +2959,12 @@
       render();
       return bar;
     }
+
+    const flash = (card, text) => {
+      const note = el('div', { className: 'banner ok', role: 'status', style: 'margin-top:8px' }, text);
+      card.append(note);
+      setTimeout(() => note.remove(), 1600);
+    };
 
     function itemCard(f, folderId, it, active, act) {
       const isNote = it.kind === 'note';
@@ -2804,8 +2999,9 @@
         };
         foot.append(copy);
       }
+      let rm = null;
       if (active) {
-        const rm = el('button', { type: 'button', className: 'btn small danger' }, isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove'));
+        rm = el('button', { type: 'button', className: 'btn small danger' }, isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove'));
         rm.onclick = () => {
           if (isNote && !confirmIn(L('این پیام فقط در پوشه است و برای همیشه حذف می‌شود. ادامه می‌دهید؟', 'This message exists only in the folder and will be deleted permanently. Continue?'))) return;
           act(() => call('DELETE', `/${folderId}/items/${it.id}`), isNote ? L('پیام حذف شد.', 'Message deleted.') : L('پیام از پوشه حذف شد.', 'Message removed from the folder.'));
@@ -2813,6 +3009,36 @@
         foot.append(rm);
       }
       card.append(foot);
+
+      // The message actions, as in a conversation: from the ⋮ button or a right-click.
+      const copyText = async (text, okText) => {
+        try { await navigator.clipboard.writeText(text); flash(card, okText); } catch (e) { flash(card, L('کپی نشد', 'Copy failed')); }
+      };
+      const items = () => {
+        const team = currentTeam();
+        return [
+          active ? { label: L('افزودن واکنش', 'Add reaction'), run: () => card.querySelector('.rchip.add')?.click() } : null,
+          !isNote ? { label: L('پاسخ در رشته', 'Reply in thread'), run: () => { goToPost(it.post_id); ReplyClick.openThread(it.post_id, 120); } } : null,
+          !isNote ? { label: L('رفتن به پیام', 'Go to message'), run: () => goToPost(it.post_id) } : null,
+          !isNote ? { label: L('ارسال به…', 'Send to…'), run: () => Forward.open(it.post_id) } : null,
+          it.message ? { label: L('کپی متن', 'Copy text'), run: () => copyText(it.message, L('متن کپی شد ✓', 'Text copied ✓')) } : null,
+          !isNote && team ? { label: L('کپی لینک', 'Copy link'), run: () => copyText(`${location.origin}${basePath}/${team.name}/pl/${it.post_id}`, L('لینک کپی شد ✓', 'Link copied ✓')) } : null,
+          active ? { label: isNote ? L('حذف', 'Delete') : L('حذف از پوشه', 'Remove from folder'), danger: true, run: () => rm.click() } : null
+        ];
+      };
+      const kebab = el('button', { type: 'button', className: 'kebab', title: L('گزینه‌های پیام', 'Message options') }, '⋮');
+      kebab.setAttribute('aria-label', L('گزینه‌های پیام', 'Message options'));
+      kebab.setAttribute('aria-haspopup', 'menu');
+      kebab.onclick = () => menuAt(kebab, items());
+      card.append(kebab);
+      card.addEventListener('contextmenu', e => {
+        // Links, images, code, inputs, selected text and Shift keep the browser's menu.
+        if (e.shiftKey || e.target.closest('a, img, video, pre, code, input, textarea, .fmenu')) return;
+        const sel = (card.ownerDocument.defaultView || window).getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+        e.preventDefault();
+        popMenu(e.clientX, e.clientY, items());
+      });
       requestAnimationFrame(() => {
         if (body.scrollHeight > 240) { body.classList.add('clamp'); more.hidden = false; }
       });
@@ -2836,34 +3062,83 @@
       return res.json();
     }
 
-    // Composer at the bottom of a folder: text and files, sent only to the
-    // folder (default) or also to the folder's conversation.
-    function composer(f, folderId) {
+    // Composer, shown above the messages. «در گفتگو هم» uses Mattermost's own
+    // editor (window.Components.AdvancedTextEditor, rendered through a portal by
+    // the panel component, so it has Mattermost's store, emoji picker,
+    // formatting, attachments and drafts). «فقط در پوشه» is a box laid out the
+    // same way whose message is stored only in the folder.
+    let composerMode = 'folder';
+    const conversationIds = new Map(); // folder ID → its conversation channel ID
+
+    const icon = (cls, fallback) => el('i', { className: `icon ${cls}`, 'aria-hidden': 'true' }, fallback ? el('span', { className: 'icon-fallback' }, fallback) : null);
+    const editorAvailable = () => Boolean(host && editorSubs.size && window.Components && window.Components.AdvancedTextEditor && window.ReactDOM && window.ReactDOM.createPortal);
+
+    async function conversationOf(folderId) {
+      if (!conversationIds.has(folderId)) conversationIds.set(folderId, (await call('POST', `/${folderId}/conversation`)).channel_id);
+      return conversationIds.get(folderId);
+    }
+
+    // After Mattermost's editor sent a message: add it to the folder. Uses the
+    // created post if the editor reports it, else the user's newest post there.
+    async function addSentPost(folderId, channelId, res) {
       const me = state().users.currentUserId;
+      let pid = res && ((res.created && res.created.id) || (res.data && res.data.id) || res.id);
+      for (let attempt = 0; !pid && attempt < 5; attempt++) {
+        if (attempt) await new Promise(r => setTimeout(r, 400));
+        try {
+          const list = await v4('GET', `/channels/${encodeURIComponent(channelId)}/posts?per_page=10`);
+          const recent = Date.now() - 20000;
+          pid = (list.order || []).find(x => { const p = list.posts[x]; return p && p.user_id === me && !p.type && p.create_at >= recent; });
+        } catch (e) { /* retry */ }
+      }
+      if (!pid) return showFolder(folderId, undefined, new FolderApiError(404, 'not_found'));
+      try {
+        await call('POST', `/${folderId}/items`, { post_id: pid });
+        await showFolder(folderId, L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
+      } catch (e) {
+        await showFolder(folderId, undefined, e);
+      }
+    }
+
+    // The «فقط در پوشه» box (and the fallback for «در گفتگو هم» when
+    // Mattermost's editor isn't available, e.g. in the overlay).
+    function folderBox(f, folderId, mode) {
       const MAX_FILES = 10;
       const files = [];
-      let mode = 'folder';
-      const wrap = el('div', { className: 'composer' });
-      const ta = el('textarea', { className: 'input', rows: 3, maxLength: 4000, dir: 'auto', placeholder: L('پیام یا توضیح بنویسید… (Ctrl+Enter برای ارسال)', 'Write a message… (Ctrl+Enter to send)') });
+      const box2 = el('div', { className: 'mmbox' });
+      const ta = el('textarea', { className: 'mmbox-text', rows: 1, maxLength: 4000, dir: 'auto',
+        placeholder: mode === 'folder' ? L('پیامی برای این پوشه بنویسید…', 'Write a message for this folder…') : L('پیامی بنویسید…', 'Write a message…') });
       ta.setAttribute('aria-label', L('متن پیام', 'Message text'));
-      const chips = el('div', { className: 'people' });
+      const chips = el('div', { className: 'mmbox-files' });
       const picker = el('input', { type: 'file', multiple: true, hidden: true });
-      const attach = el('button', { type: 'button', className: 'btn small' }, `📎 ${L('پیوست فایل', 'Attach files')}`);
-      attach.onclick = () => picker.click();
       const err = el('div', {});
-      const hint = el('div', { className: 'hint' });
-      const send = el('button', { type: 'button', className: 'btn primary' }, L('ارسال', 'Send'));
-
-      const other = () => [...f.members].find(id => id !== me);
-      const modes = el('div', { className: 'seg', role: 'radiogroup' });
-      modes.setAttribute('aria-label', L('محل ارسال', 'Where to send'));
-      const modeBtn = (value, label) => {
-        const b = el('button', { type: 'button', role: 'radio' }, label);
-        b.onclick = () => { mode = value; sync(); };
-        b.dataset.value = value;
-        return b;
+      const attach = el('button', { type: 'button', className: 'mmbox-btn', title: L('پیوست فایل', 'Attach files') }, icon('icon-paperclip', '📎'));
+      attach.setAttribute('aria-label', L('پیوست فایل', 'Attach files'));
+      attach.onclick = () => picker.click();
+      const emojiBtn = el('button', { type: 'button', className: 'mmbox-btn', title: L('ایموجی', 'Emoji') }, icon('icon-emoticon-happy-outline', '☺'));
+      emojiBtn.setAttribute('aria-label', L('ایموجی', 'Emoji'));
+      let emojiMenu = null;
+      emojiBtn.onclick = () => {
+        if (emojiMenu) { emojiMenu.remove(); emojiMenu = null; return; }
+        emojiMenu = el('div', { className: 'rpicker mmbox-emoji', role: 'group' });
+        for (const name of Object.keys(EMOJI).filter((n, i, a) => a.indexOf(n) === i && !['thumbsup', 'thumbsdown'].includes(n))) {
+          const b = el('button', { type: 'button', title: name }, EMOJI[name]);
+          b.setAttribute('aria-label', name);
+          b.onclick = () => {
+            const at = ta.selectionStart ?? ta.value.length;
+            ta.value = `${ta.value.slice(0, at)}${EMOJI[name]}${ta.value.slice(ta.selectionEnd ?? at)}`;
+            ta.focus();
+            ta.selectionStart = ta.selectionEnd = at + EMOJI[name].length;
+            emojiMenu.remove();
+            emojiMenu = null;
+            sync();
+          };
+          emojiMenu.append(b);
+        }
+        box2.append(emojiMenu);
       };
-      modes.append(modeBtn('folder', L('فقط در پوشه', 'Folder only')), modeBtn('conversation', L('در گفتگو هم', 'Also in conversation')));
+      const send = el('button', { type: 'button', className: 'mmbox-send', title: L('ارسال', 'Send') }, icon('icon-send', '➤'));
+      send.setAttribute('aria-label', L('ارسال', 'Send'));
 
       function addFiles(list) {
         for (const file of list) if (files.length < MAX_FILES) files.push(file);
@@ -2874,26 +3149,25 @@
         const pasted = e.clipboardData && e.clipboardData.files;
         if (pasted && pasted.length) { e.preventDefault(); addFiles(pasted); }
       });
-      wrap.addEventListener('dragover', e => { e.preventDefault(); wrap.classList.add('drop'); });
-      wrap.addEventListener('dragleave', () => wrap.classList.remove('drop'));
-      wrap.addEventListener('drop', e => { e.preventDefault(); wrap.classList.remove('drop'); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
-      ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !send.disabled) { e.preventDefault(); send.click(); } });
+      box2.addEventListener('dragover', e => { e.preventDefault(); box2.classList.add('drop'); });
+      box2.addEventListener('dragleave', () => box2.classList.remove('drop'));
+      box2.addEventListener('drop', e => { e.preventDefault(); box2.classList.remove('drop'); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
+      // Enter sends, Shift+Enter is a new line (as in Mattermost).
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!send.disabled) send.click(); }
+      });
       ta.addEventListener('input', () => sync());
 
       function sync() {
-        for (const b of modes.children) b.setAttribute('aria-checked', String(b.dataset.value === mode));
+        ta.style.height = 'auto';
+        ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`;
         chips.replaceChildren(...files.map((file, i) => {
           const x = el('button', { type: 'button', className: 'x', title: L('حذف', 'Remove') }, '✕');
           x.setAttribute('aria-label', L(`حذف ${file.name}`, `Remove ${file.name}`));
           x.onclick = () => { files.splice(i, 1); sync(); };
-          return el('span', { className: 'person' }, el('span', { 'aria-hidden': 'true' }, fileIcon(String(file.name).split('.').pop())), `${file.name} · ${humanSize(file.size)}`, x);
+          return el('span', { className: 'mmbox-chip' }, el('span', { 'aria-hidden': 'true' }, fileIcon(String(file.name).split('.').pop())),
+            el('span', { className: 'n', dir: 'auto' }, file.name), el('span', { className: 's' }, humanSize(file.size)), x);
         }));
-        const who = other();
-        hint.textContent = mode === 'folder'
-          ? L('فقط در همین پوشه نمایش داده می‌شود و در هیچ گفتگویی نیست.', 'Shown only in this folder, not in any conversation.')
-          : f.kind === 'group' ? L('در پیام گروهی اعضای پوشه هم فرستاده می‌شود.', 'Also sent to the group message of the folder’s members.')
-            : f.kind === 'shared' && who ? L(`در پیام مستقیم با ${nameOf(who)} هم فرستاده می‌شود.`, `Also sent in your direct message with ${nameOf(who)}.`)
-              : L('در گفتگو با خودتان هم فرستاده می‌شود (فقط شما می‌بینید).', 'Also sent to your conversation with yourself (only you see it).');
         attach.disabled = files.length >= MAX_FILES;
         send.disabled = !ta.value.trim() && !files.length;
       }
@@ -2908,8 +3182,9 @@
             form.append('text', text);
             for (const file of files) form.append('files', file, file.name);
             await sendForm(`${API()}/${folderId}/notes`, form);
+            await showFolder(folderId, L('در پوشه ذخیره شد.', 'Saved in the folder.'));
           } else {
-            const { channel_id: channelId } = await call('POST', `/${folderId}/conversation`);
+            const channelId = await conversationOf(folderId);
             let fileIds = [];
             if (files.length) {
               const form = new FormData();
@@ -2919,17 +3194,64 @@
             }
             const post = await v4('POST', '/posts', { channel_id: channelId, message: text, file_ids: fileIds });
             await call('POST', `/${folderId}/items`, { post_id: post.id });
+            await showFolder(folderId, L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
           }
-          await showFolder(folderId, mode === 'folder' ? L('در پوشه ذخیره شد.', 'Saved in the folder.') : L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
         } catch (e) {
           err.replaceChildren(errorNode(e));
           send.disabled = false;
         }
       };
 
-      wrap.append(el('div', { className: 'section' }, L('ارسال در پوشه', 'Send to this folder')), ta, chips,
-        el('div', { className: 'row-between' }, el('div', { className: 'tools' }, attach, modes), send), hint, err, picker);
+      box2.append(ta, chips, el('div', { className: 'mmbox-bar' }, attach, emojiBtn, el('span', { className: 'grow' }), send), picker);
       sync();
+      return el('div', {}, box2, err);
+    }
+
+    function composer(f, folderId) {
+      const me = state().users.currentUserId;
+      const wrap = el('div', { className: 'composer' });
+      const seg = el('div', { className: 'seg', role: 'radiogroup' });
+      seg.setAttribute('aria-label', L('محل ارسال', 'Where to send'));
+      const area = el('div', { className: 'composer-area' });
+      const hint = el('div', { className: 'hint' });
+      const other = [...f.members].find(id => id !== me);
+
+      const render = async () => {
+        for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === composerMode));
+        hint.textContent = composerMode === 'folder'
+          ? L('فقط در همین پوشه نمایش داده می‌شود و در هیچ گفتگویی نیست.', 'Shown only in this folder, not in any conversation.')
+          : f.kind === 'group' ? L('در پیام گروهی اعضای پوشه هم فرستاده می‌شود.', 'Also sent to the group message of the folder’s members.')
+            : f.kind === 'shared' && other ? L(`در پیام مستقیم با ${nameOf(other)} هم فرستاده می‌شود.`, `Also sent in your direct message with ${nameOf(other)}.`)
+              : L('در گفتگو با خودتان هم فرستاده می‌شود (فقط شما می‌بینید).', 'Also sent to your conversation with yourself (only you see it).');
+        setEditor(null);
+        if (composerMode === 'conversation' && editorAvailable()) {
+          const slot = el('div', { className: 'mm-editor' });
+          area.replaceChildren(slot);
+          try {
+            const channelId = await conversationOf(folderId);
+            if (!slot.isConnected) return;
+            setEditor({
+              key: `${folderId}:${channelId}`, node: slot, channelId,
+              storageKey: `mmrtl-folder-${folderId}`,
+              placeholder: L('پیامی بنویسید…', 'Write a message…'),
+              afterSubmit: res => { addSentPost(folderId, channelId, res); }
+            });
+          } catch (e) {
+            area.replaceChildren(errorNode(e));
+          }
+        } else {
+          area.replaceChildren(folderBox(f, folderId, composerMode));
+        }
+      };
+      const modeBtn = (value, label) => {
+        const b = el('button', { type: 'button', role: 'radio' }, label);
+        b.dataset.value = value;
+        b.onclick = () => { if (composerMode !== value) { composerMode = value; render(); } };
+        return b;
+      };
+      seg.append(modeBtn('folder', L('فقط در پوشه', 'Folder only')), modeBtn('conversation', L('در گفتگو هم', 'Also in conversation')));
+      wrap.append(el('div', { className: 'composer-head' }, seg), area, hint);
+      render();
       return wrap;
     }
 
@@ -2947,9 +3269,10 @@
       const me = state().users.currentUserId;
       await loadNames([f.owner, f.delete_by, f.contact, ...f.members, ...(f.invitees || []), ...items.flatMap(i => [i.added_by, i.user_id])]);
       const b = dialog(f.name, back);
-      b.append(el('div', { className: 'folder', style: 'cursor:default' },
+      const head = el('div', { className: 'folder', style: 'cursor:default' },
         el('div', { className: 'ficon' }, KIND_ICON[f.kind]),
-        el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f)))));
+        el('div', { className: 'ftext' }, el('div', { className: 'fname' }, f.name, statusTag(f)), el('div', { className: 'fmeta' }, folderSubtitle(f))));
+      b.append(head);
       if (f.kind === 'shared' || f.kind === 'group') {
         const people = el('div', { className: 'people', style: 'margin-top:8px' });
         for (const uid of f.members) people.append(el('span', { className: 'person' }, avatar(uid), uid === f.owner ? `${nameOf(uid)} ★` : nameOf(uid)));
@@ -2996,6 +3319,7 @@
       }
 
       const active = f.status === 'active';
+      if (active) b.append(composer(f, id));
       const missing = selection.filter(pid => !items.some(i => i.post_id === pid));
       if (missing.length && active) {
         const add = el('button', { type: 'button', className: 'btn primary block', style: 'margin-top:12px' },
@@ -3031,33 +3355,51 @@
       const sorted = [...items].sort((a, c) => c.added_at - a.added_at);
       for (const it of sorted) msgs.append(itemCard(f, id, it, active, act));
       b.append(msgs);
-      if (active) b.append(composer(f, id));
 
-      const shared = f.kind === 'shared' || f.kind === 'group';
-      const footer = el('div', { className: 'footer' });
-      if (shared && active) {
-        const leave = el('button', { type: 'button', className: 'btn' }, L('ترک پوشه', 'Leave folder'));
-        leave.onclick = () => {
-          if (confirmIn(L('پوشه را ترک می‌کنید؟ پیام‌ها برای بقیهٔ اعضا باقی می‌مانند.', 'Leave this folder? Messages stay for the other members.'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
+      // Newest messages are at the top; after scrolling down, a button brings them back.
+      const firstCard = msgs.firstElementChild;
+      if (firstCard) {
+        const jump = el('button', { type: 'button', className: 'jump', hidden: true }, `↑ ${L('آخرین پیام', 'Latest message')}`);
+        const scroller = host || b;
+        scroller.onscroll = () => {
+          if (!firstCard.isConnected) return;
+          jump.hidden = firstCard.getBoundingClientRect().top >= scroller.getBoundingClientRect().top - 40;
         };
-        footer.append(leave);
+        jump.onclick = () => firstCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        b.append(jump);
+      }
+
+      // Folder actions sit in a ⋮ menu beside the folder name.
+      const shared = f.kind === 'shared' || f.kind === 'group';
+      const actions = [];
+      if (shared && active) {
+        actions.push({ label: L('ترک پوشه', 'Leave folder'), run: () => {
+          if (confirmIn(L('پوشه را ترک می‌کنید؟ پیام‌ها برای بقیهٔ اعضا باقی می‌مانند.', 'Leave this folder? Messages stay for the other members.'))) runThenList(() => call('POST', `/${id}/leave`), L('از پوشه خارج شدید.', 'You left the folder.'));
+        } });
       }
       if (active || (f.status === 'pending' && f.role === 'owner')) {
-        const del = el('button', { type: 'button', className: 'btn danger' }, shared && active ? L('درخواست حذف پوشه', 'Request deletion') : L('حذف پوشه', 'Delete folder'));
-        del.onclick = () => {
+        actions.push({ label: shared && active ? L('درخواست حذف از پوشه', 'Request deletion') : L('حذف پوشه', 'Delete folder'), danger: true, run: () => {
           const msg = shared && active
             ? L('حذف این پوشه نیاز به تأیید همهٔ اعضا دارد. درخواست را می‌فرستید؟', 'Deleting this folder needs every member to approve. Send the request?')
             : L('این پوشه برای همیشه حذف می‌شود. پیام‌های اصلی دست نمی‌خورند. ادامه می‌دهید؟', 'This folder will be deleted permanently. The original messages are not affected. Continue?');
           if (confirmIn(msg)) runThenList(() => call('POST', `/${id}/delete-request`), shared && active ? L('درخواست حذف برای اعضا فرستاده شد.', 'Deletion request sent.') : L('پوشه حذف شد.', 'Folder deleted.'));
-        };
-        footer.append(del);
+        } });
       }
-      if (footer.children.length) b.append(footer);
+      if (actions.length) {
+        const kebab = el('button', { type: 'button', className: 'kebab', title: L('گزینه‌های پوشه', 'Folder options') }, '⋮');
+        kebab.setAttribute('aria-label', L('گزینه‌های پوشه', 'Folder options'));
+        kebab.setAttribute('aria-haspopup', 'menu');
+        kebab.onclick = () => menuAt(kebab, actions);
+        head.append(kebab);
+      }
     }
 
     return {
       open, openMany, openFolder, openCreate, openForChannel, close, attach, detach,
       setRhs: r => { rhs = r; },
+      setPageRoute: on => { pageRoute = on; },
+      configure: ({ page }) => { pageMode = Boolean(page); },
+      subscribeEditor: fn => { editorSubs.add(fn); fn(editorSlot); return () => editorSubs.delete(fn); },
       list: () => call('GET'),
       onChange: fn => listeners.add(fn),
       loadNames, nameOf, kindLabels, splitFences
@@ -3074,10 +3416,7 @@
     const POSTS = 'div.post[id^="post_"]:not(.post--system)';
 
     function injectCSS() {
-      if (document.getElementById('mmrtl-sel-style')) return;
-      const st = document.createElement('style');
-      st.id = 'mmrtl-sel-style';
-      st.textContent = `
+      upsertStyle(document, 'mmrtl-sel-style', `
         html.mmrtl-selecting ${POSTS} { position: relative; }
         .mmrtl-sel { position: absolute; top: 10px; inset-inline-start: 6px; z-index: 6; width: 20px; height: 20px; padding: 0; border-radius: 4px; border: 2px solid rgba(var(--center-channel-color-rgb), .45); background: var(--center-channel-bg); color: var(--button-color); font-size: 13px; line-height: 16px; cursor: pointer; }
         .mmrtl-sel[aria-checked="true"] { background: var(--button-bg); border-color: var(--button-bg); }
@@ -3085,8 +3424,7 @@
         .mmrtl-selbar { position: fixed; z-index: 2147482998; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: var(--center-channel-bg); color: var(--center-channel-color); border: 1px solid rgba(var(--center-channel-color-rgb), .16); box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 14px; }
         .mmrtl-selbar button { height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid rgba(var(--center-channel-color-rgb), .16); background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
         .mmrtl-selbar button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
-        .mmrtl-selbar button:disabled { opacity: .45; cursor: default; }`;
-      (document.head || document.documentElement).appendChild(st);
+        .mmrtl-selbar button:disabled { opacity: .45; cursor: default; }`);
     }
 
     function setPicked(post, id, value) {
@@ -3182,10 +3520,7 @@
     const setCollapsed = v => { try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) { /* not persisted */ } };
 
     function injectCSS() {
-      if (document.getElementById('mmrtl-fsb-style')) return;
-      const st = document.createElement('style');
-      st.id = 'mmrtl-fsb-style';
-      st.textContent = `
+      upsertStyle(document, 'mmrtl-fsb-style', `
         .mmrtl-fsb { padding: 2px 8px 6px; color: var(--sidebar-text); font-size: 13px; }
         .mmrtl-fsb button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border-radius: 4px; cursor: pointer; color: inherit; }
         .mmrtl-fsb button:hover, .mmrtl-fsb button:focus-visible { background: rgba(var(--sidebar-text-rgb), .08); }
@@ -3196,8 +3531,7 @@
         .mmrtl-fsb .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mmrtl-fsb .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .6; }
         .mmrtl-fsb .badge { margin-inline-start: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--mention-bg); color: var(--mention-color); font-size: 11px; text-align: center; }
-        .mmrtl-fsb .muted { opacity: .7; }`;
-      (document.head || document.documentElement).appendChild(st);
+        .mmrtl-fsb .muted { opacity: .7; }`);
     }
 
     function el(tag, props = {}, ...kids) {
@@ -3764,11 +4098,14 @@
             { title: 'پیش‌نمایش فایل Markdown', settings: [radio('md_preview', 'پیش‌نمایش فایل‌های md', 'فایل‌های .md، .markdown و .mdx با قالب‌بندی، جهت درست فارسی/انگلیسی، رنگ‌آمیزی کد و نمودار Mermaid نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (متن خام)']])] },
             { title: 'پیش‌نمایش فایل CSV و JSON', settings: [radio('data_preview', 'پیش‌نمایش فایل‌های CSV، TSV و JSON', 'CSV/TSV به‌صورت جدول (جهت هر سلول جداگانه) و JSON مرتب‌شده با رنگ‌آمیزی نمایش داده می‌شوند.', [['on', 'فعال'], ['off', 'غیرفعال (پیش‌نمایش Mattermost)']])] },
             { title: 'پیش‌نمایش فایل‌های کد', settings: [radio('code_preview', 'پیش‌نمایش فایل‌های کد با Prism', 'فایل‌های کد (js، ts، py، cs، java، go، sql، yaml، sh، ps1، html، css، Dockerfile و…) با رنگ‌آمیزی، شماره خط و دکمهٔ Copy نمایش داده می‌شوند. خاموش: پیش‌نمایش خود Mattermost.', [['on', 'فعال (همهٔ فایل‌های کد)'], ['off', 'غیرفعال']])] },
+            { title: 'پیش‌نمایش فایل‌های Office', settings: [radio('office_preview', 'پیش‌نمایش Excel، Word و PowerPoint', 'محتوای فایل‌های xlsx (جدول هر برگه)، docx (متن، جدول و تصویر) و pptx (متن و تصویرهای هر اسلاید) در فریم ایزوله نمایش داده می‌شود. چیدمان دقیق Office نیست؛ ماکروها هرگز اجرا نمی‌شوند. خاموش: پیش‌نمایش خود Mattermost.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'خروجی Markdown پیام', settings: [radio('md_export', 'نمایش و دانلود پیام به‌صورت Markdown', 'دکمهٔ «MD» در نوار هاور پیام و گزینهٔ منوی «…»: متن پیام به یک سند Markdown مرتب (سرفصل، لیست، بلوک کد، کد درون‌خطی) تبدیل، پیش‌نمایش و به‌صورت فایل .md دانلود می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'چسباندن متن بلند به‌صورت فایل', settings: [radio('paste_as_file', 'پیشنهاد ارسال متن بلند به‌صورت فایل .md', 'بعد از چسباندن متن بلند (۱۰ خط یا ۱۰۰۰ کاراکتر به بالا) در کادر پیام، نواری پیشنهاد می‌دهد آن را به‌صورت پیوست .md (خام یا مرتب‌شده) بفرستید. متن‌های کوتاه و فایل‌ها دست نمی‌خورند.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'زبان کد هنگام چسباندن', settings: [radio('code_paste', 'انتخاب زبان برای کدِ چسبانده‌شده', 'وقتی کد می‌چسبانید (یا داخل یک بلوک ``` بدون زبان)، نواری زبان را حدس می‌زند و اجازه می‌دهد آن را در بلوک کد با زبان درست قرار دهید (Mattermost آن را رنگ‌آمیزی می‌کند) یا کد بلند را به‌صورت فایل بفرستید.', [['on', 'فعال'], ['off', 'غیرفعال']])] },
             { title: 'تیک دیده‌شدن پیام', settings: [radio('read_receipts', 'نمایش ✓ و ✓✓ زیر پیام‌های شما', 'فقط وقتی مدیر سیستم این قابلیت را فعال کرده باشد کار می‌کند. خاموش کردن، فقط نمایش را در صفحهٔ شما پنهان می‌کند.', [['on', 'نمایش'], ['off', 'پنهان']])] },
             { title: 'منوی راست‌کلیک پیام', settings: [radio('context_menu', 'منوی راست‌کلیک روی پیام', 'راست‌کلیک روی پیام، منوی «بیشتر» و دکمه‌های نوار پیام را کنار نشانگر باز می‌کند. روی لینک، تصویر، کد، متن انتخاب‌شده یا با Shift، منوی خود مرورگر باز می‌شود.', [['on', 'فعال'], ['off', 'غیرفعال (منوی مرورگر)']])] },
+            { title: 'باز کردن پاسخ با کلیک', settings: [radio('reply_click', 'باز کردن رشتهٔ پاسخ با کلیک روی پیام', 'کلیک روی متن پیام، پنل پاسخ (Reply) همان پیام را باز می‌کند. کلیک روی لینک، دکمه، تصویر، کد یا متن انتخاب‌شده کار خودش را می‌کند. خود Mattermost هم در Display گزینهٔ یک‌کلیکی «Click to open threads» دارد.', [['off', 'غیرفعال'], ['single', 'با یک‌بار کلیک'], ['double', 'با دوبار کلیک']])] },
+            { title: 'محل نمایش پوشه‌ها', settings: [radio('folders_view', 'پوشه‌ها کجا باز شوند', 'پنل سمت راست (کنار گفتگو) یا کل فضای اصلی پیام‌رسان.', [['panel', 'پنل سمت راست'], ['page', 'فضای کامل پیام‌رسان']])] },
             { title: 'منوی کناری', settings: [radio('sidebar_toggle', 'جمع/باز کردن منوی کناری با کلیک روی لوگو', '', [['on', 'فعال'], ['off', 'غیرفعال']])] }
           ]
         });
@@ -3799,15 +4136,36 @@
       );
       // Folders open in the right-hand panel when the API exists, else in an overlay.
       if (React && typeof registry.registerRightHandSidebarComponent === 'function') {
-        const FoldersPanel = () => {
+        // The panel renders inside Mattermost's React tree, so it can portal
+        // Mattermost's own editor (with its store) into the folder view.
+        // kind 'rhs': the right-hand panel; 'page': the center area (no channel
+        // is shown there, so the editor can use CENTER's «post_textbox» id).
+        const folderHost = kind => () => {
           const ref = React.useRef(null);
+          const [slot, setSlot] = React.useState(null);
           React.useEffect(() => {
             const el = ref.current;
-            Folders.attach(el);
-            return () => Folders.detach(el);
+            const off = Folders.subscribeEditor(setSlot);
+            Folders.attach(el, kind);
+            return () => { off(); Folders.detach(el); };
           }, []);
-          return React.createElement('div', { ref, className: 'mmrtl-folders rhs' });
+          const Editor = window.Components && window.Components.AdvancedTextEditor;
+          const portal = slot && Editor && window.ReactDOM && window.ReactDOM.createPortal
+            ? window.ReactDOM.createPortal(React.createElement(Editor, {
+              // RHS_COMMENT gives the box the id «reply_textbox», which is free while
+              // this panel occupies the right-hand side (CENTER would duplicate
+              // the channel's own «post_textbox»). No rootId: a normal post.
+              key: slot.key, location: kind === 'page' ? 'CENTER' : 'RHS_COMMENT', channelId: slot.channelId, rootId: '', isThreadView: false,
+              placeholder: slot.placeholder, storageKey: slot.storageKey, afterSubmit: slot.afterSubmit
+            }), slot.node)
+            : null;
+          return React.createElement('div', { ref, className: `mmrtl-folders ${kind}` }, portal);
         };
+        const FoldersPanel = folderHost('rhs');
+        if (typeof registry.registerNeedsTeamRoute === 'function') {
+          registry.registerNeedsTeamRoute('/folders', folderHost('page'));
+          Folders.setPageRoute(true);
+        }
         Folders.setRhs(registry.registerRightHandSidebarComponent(FoldersPanel, L('پوشه‌ها', 'Folders')));
       }
       // The sidebar section and the header button appear only when the admin has

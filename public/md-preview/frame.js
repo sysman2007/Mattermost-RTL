@@ -485,9 +485,116 @@
     wireLinks(article);
   }
 
+  // ── Office (.xlsx, .docx, .pptx): parsed by office.js, loaded only for these files ──
+  function loadOffice() {
+    if (window.MMRTLOffice) return Promise.resolve(window.MMRTLOffice);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `${BASE}office.js`;
+      s.onload = () => (window.MMRTLOffice ? resolve(window.MMRTLOffice) : reject(new Error('office')));
+      s.onerror = () => reject(new Error('office'));
+      document.head.appendChild(s);
+    });
+  }
+
+  function h(tag, attrs = {}, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'className') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (v != null) n.setAttribute(k, v);
+    }
+    for (const k of kids) if (k != null) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+    return n;
+  }
+  const dirOf = text => (RTL_RE.test(text) ? 'rtl' : 'ltr');
+
+  function xlsxView(O, sheets) {
+    const wrap = h('div', {});
+    const tabs = h('div', { className: 'office-tabs', role: 'tablist' });
+    const panel = h('div', {});
+    const show = i => {
+      const sh = sheets[i];
+      for (const [j, t] of Array.from(tabs.children).entries()) t.setAttribute('aria-selected', String(j === i));
+      const cols = Math.max(1, sh.width);
+      const info = `${sh.rows.length} rows × ${cols} columns` +
+        (sh.truncatedRows ? ' · showing the first 2000 rows' : '') + (sh.truncatedCols ? ' · showing the first 200 columns' : '');
+      const head = h('tr', {}, h('th', { className: 'rownum' }, '#'));
+      for (let c = 0; c < cols; c++) head.append(h('th', { dir: 'ltr' }, O.colName(c)));
+      const body = h('tbody', {});
+      sh.rows.forEach((row, r) => {
+        const tr = h('tr', {}, h('td', { className: 'rownum' }, String(r + 1)));
+        for (let c = 0; c < cols; c++) {
+          const cell = row && row[c];
+          const td = h('td', cell ? { dir: cell.num ? 'ltr' : dirOf(cell.text), className: cell.num ? 'num' : null } : {});
+          if (cell) td.textContent = cell.text;
+          tr.append(td);
+        }
+        body.append(tr);
+      });
+      panel.replaceChildren(h('div', { className: 'data-info', dir: 'ltr' }, info),
+        h('div', { className: 'table-wrap data-table' }, h('table', {}, h('thead', {}, head), body)));
+    };
+    sheets.forEach((sh, i) => {
+      const t = h('button', { type: 'button', role: 'tab', className: 'office-tab', dir: 'auto' }, sh.name);
+      t.addEventListener('click', () => show(i));
+      tabs.append(t);
+    });
+    if (sheets.length > 1) wrap.append(tabs);
+    wrap.append(panel);
+    if (sheets.length) show(0); else panel.append(h('div', { className: 'data-info' }, 'Empty workbook'));
+    return wrap;
+  }
+
+  function pptxView(deck) {
+    const wrap = h('div', { className: 'slides' });
+    deck.slides.forEach((sl, i) => {
+      const card = h('section', { className: 'slide' }, h('div', { className: 'slide-no', dir: 'ltr' }, `${i + 1} / ${deck.total}`));
+      if (sl.title) card.append(h('h2', { dir: dirOf(sl.title) }, sl.title));
+      for (const b of sl.blocks) {
+        if (b.table) {
+          const tb = h('tbody', {});
+          for (const row of b.table) tb.append(h('tr', {}, ...row.map(c => h('td', { dir: dirOf(c) }, c))));
+          card.append(h('div', { className: 'table-wrap' }, h('table', {}, tb)));
+          continue;
+        }
+        const ul = h('ul', {});
+        for (const p of b) ul.append(h('li', { dir: dirOf(p.text), style: p.level ? `margin-inline-start:${Math.min(p.level, 6) * 18}px` : null }, p.text));
+        card.append(ul);
+      }
+      if (sl.images.length) card.append(h('div', { className: 'slide-images' }, ...sl.images.map(src => h('img', { src, alt: '' }))));
+      if (!sl.title && !sl.blocks.length && !sl.images.length) card.append(h('p', { className: 'muted' }, 'No text or images on this slide.'));
+      wrap.append(card);
+    });
+    if (deck.total > deck.slides.length) wrap.append(h('div', { className: 'data-info' }, `Showing the first ${deck.slides.length} of ${deck.total} slides`));
+    return wrap;
+  }
+
+  async function renderOffice(kind, buffer, name) {
+    const article = h('article', { id: 'content', className: `data-view office office-${kind}` });
+    document.body.replaceChildren(article);
+    article.append(h('div', { className: 'data-info office-note' }, 'Content preview: Office layout, fonts and effects may differ. Macros and embedded objects are never run.'));
+    try {
+      const O = await loadOffice();
+      if (kind === 'xlsx') article.append(xlsxView(O, await O.readXlsx(buffer)));
+      else if (kind === 'pptx') article.append(pptxView(await O.readPptx(buffer)));
+      else {
+        const doc = h('div', { className: 'docx' });
+        doc.innerHTML = await O.readDocx(buffer, BASE); // sanitised in office.js
+        for (const el of doc.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote')) el.setAttribute('dir', 'auto');
+        article.append(doc);
+        wireLinks(article);
+      }
+    } catch (err) {
+      const msg = { encrypted: 'This file is password-protected.', 'too-large': 'This file is too large to preview.' }[err && err.message] || 'This file could not be previewed. Download it to open it in Office.';
+      article.append(h('div', { className: 'office-error', role: 'alert' }, msg));
+    }
+  }
+
   async function render({ md, kind, ext, lang, name, theme, font }) {
     document.body.dataset.theme = theme === 'dark' ? 'dark' : 'light';
     await loadFont(font);
+    if (kind === 'xlsx' || kind === 'docx' || kind === 'pptx') return renderOffice(kind, md, name);
     if (kind === 'html') return renderHtmlFile(String(md || ''), name);
     if (kind === 'csv' || kind === 'json' || kind === 'code') {
       const article = document.createElement('article');
