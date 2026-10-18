@@ -1988,6 +1988,21 @@
   // ── Shared message folders («پوشه‌ها»). Talks to /api/v1/folders; the server
   // decides everything (membership, approvals, limits). A 404 with code
   // "disabled" means the admin hasn't turned the feature on.
+  // Inserts or refreshes a <style> by id. version changes on every release, so an
+  // upgraded plugin replaces the old rules even if the page was not reloaded.
+  const STYLE_VERSION = '2.8.0';
+  function upsertStyle(doc, id, css) {
+    let st = doc.getElementById(id);
+    if (st && st.dataset.v === STYLE_VERSION) return;
+    if (!st) {
+      st = doc.createElement('style');
+      st.id = id;
+      (doc.head || doc.documentElement).appendChild(st);
+    }
+    st.dataset.v = STYLE_VERSION;
+    st.textContent = css;
+  }
+
   const Folders = (() => {
     const API = () => `${basePath}/plugins/${PLUGIN_ID}/api/v1/folders`;
     const V4 = path => `${basePath}/api/v4${path}`;
@@ -2000,6 +2015,14 @@
     let host = null;    // the panel's element while it is open
     let pending = null; // view to render once the panel mounts
     let scope = null;   // { label, match(folder) } when opened from a conversation header
+    // Where the panel component should portal Mattermost's editor (or null).
+    let editorSlot = null;
+    const editorSubs = new Set();
+    function setEditor(slot) {
+      if (slot === editorSlot) return;
+      editorSlot = slot;
+      for (const fn of editorSubs) { try { fn(slot); } catch (e) { /* ignore */ } }
+    }
 
     class FolderApiError extends Error {
       constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -2088,10 +2111,7 @@
     // Styles go into the document the view is rendered in: the main window, or
     // the separate window when the user pops the right-hand panel out.
     function injectCSS(doc = document) {
-      if (doc.getElementById('mmrtl-folders-style')) return;
-      const st = doc.createElement('style');
-      st.id = 'mmrtl-folders-style';
-      st.textContent = `
+      upsertStyle(doc, 'mmrtl-folders-style', `
         .mmrtl-folders { --mf-line: rgba(var(--center-channel-color-rgb), .12); --mf-soft: rgba(var(--center-channel-color-rgb), .05); --mf-muted: rgba(var(--center-channel-color-rgb), .64); color: var(--center-channel-color); font-size: 14px; line-height: 1.45; }
         .mmrtl-folders.overlay { position: fixed; inset: 0; z-index: 2147483002; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
         .mmrtl-folders .box { overflow: auto; padding: 16px 20px 20px; border-radius: 12px; background: var(--center-channel-bg); }
@@ -2176,15 +2196,40 @@
         .mmrtl-folders .files .fname2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
         .mmrtl-folders .files .fsize { color: var(--mf-muted); font-size: 11px; white-space: nowrap; }
         .mmrtl-folders .reactions { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
-        .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--mf-line); border-radius: 12px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
-        .mmrtl-folders .rchip.mine { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .1); color: var(--button-bg); }
-        .mmrtl-folders .rchip.add { opacity: .7; }
+        .mmrtl-folders .rchip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid transparent; border-radius: 4px; background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .72); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .mmrtl-folders .rchip:hover { background: rgba(var(--center-channel-color-rgb), .16); }
+        .mmrtl-folders .rchip.mine { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .08); color: var(--button-bg); }
+        .mmrtl-folders .rchip.add { width: 28px; justify-content: center; background: transparent; font-size: 16px; color: rgba(var(--center-channel-color-rgb), .56); }
+        .mmrtl-folders .rchip.add:hover { background: rgba(var(--center-channel-color-rgb), .08); }
         .mmrtl-folders .rchip:disabled { cursor: default; }
         .mmrtl-folders .rpicker { display: flex; gap: 2px; padding: 4px; border: 1px solid var(--mf-line); border-radius: 8px; background: var(--center-channel-bg); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
         .mmrtl-folders .rpicker button { border: 0; background: transparent; font-size: 18px; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; }
         .mmrtl-folders .rpicker button:hover { background: var(--mf-soft); }
         .mmrtl-folders .rerr { font-size: 12px; color: var(--error-text); }
-        .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding: 12px; border: 1px solid var(--mf-line); border-radius: 8px; }
+        .mmrtl-folders .composer { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 6px; }
+        .mmrtl-folders .composer-head { display: flex; align-items: center; justify-content: flex-start; }
+        .mmrtl-folders .mm-editor { min-height: 48px; }
+        .mmrtl-folders .icon-fallback { display: none; }
+        .mmrtl-folders .mmbox { position: relative; display: flex; flex-direction: column; border: 1px solid rgba(var(--center-channel-color-rgb), .16); border-radius: 4px; background: var(--center-channel-bg); }
+        .mmrtl-folders .mmbox:focus-within { border-color: rgba(var(--center-channel-color-rgb), .32); box-shadow: inset 0 0 0 1px rgba(var(--center-channel-color-rgb), .16); }
+        .mmrtl-folders .mmbox.drop { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .04); }
+        .mmrtl-folders .mmbox-text { min-height: 44px; max-height: 220px; padding: 12px 16px 6px; border: 0; outline: none; resize: none !important; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 20px; }
+        .mmrtl-folders .mmbox-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px; }
+        .mmrtl-folders .mmbox-files:empty { display: none; }
+        .mmrtl-folders .mmbox-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 10px; border: 1px solid var(--mf-line); border-radius: 4px; font-size: 12px; }
+        .mmrtl-folders .mmbox-chip .n { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mmrtl-folders .mmbox-chip .s { color: var(--mf-muted); }
+        .mmrtl-folders .mmbox-chip .x { border: 0; background: transparent; color: inherit; opacity: .6; cursor: pointer; font: inherit; }
+        .mmrtl-folders .mmbox-bar { display: flex; align-items: center; gap: 2px; padding: 4px 8px 6px; }
+        .mmrtl-folders .mmbox-bar .grow { flex: 1 1 auto; }
+        .mmrtl-folders .mmbox-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: rgba(var(--center-channel-color-rgb), .64); font-size: 18px; cursor: pointer; }
+        .mmrtl-folders .mmbox-btn:hover { background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .8); }
+        .mmrtl-folders .mmbox-btn:disabled { opacity: .4; cursor: default; }
+        .mmrtl-folders .mmbox-send { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: var(--button-bg); color: var(--button-color); font-size: 18px; cursor: pointer; }
+        .mmrtl-folders .mmbox-send:disabled { background: rgba(var(--center-channel-color-rgb), .08); color: rgba(var(--center-channel-color-rgb), .32); cursor: default; }
+        .mmrtl-folders [dir="rtl"] .mmbox-send .icon, .mmrtl-folders .box[dir="rtl"] .mmbox-send .icon { transform: scaleX(-1); }
+        .mmrtl-folders .mmbox-emoji { position: absolute; bottom: 44px; inset-inline-start: 8px; z-index: 5; flex-wrap: wrap; max-width: 260px; }
+        .mmrtl-folders .jump { position: sticky; bottom: 12px; z-index: 4; display: block; margin: 10px auto 0; height: 32px; padding: 0 16px; border: 0; border-radius: 16px; background: var(--button-bg); color: var(--button-color); font: inherit; font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.2); cursor: pointer; }
         .mmrtl-folders .composer.drop { border-color: var(--button-bg); background: rgba(var(--button-bg-rgb), .05); }
         .mmrtl-folders .composer .section { margin: 0; }
         .mmrtl-folders .composer textarea { height: auto; min-height: 72px; padding: 8px 12px; resize: vertical; }
@@ -2193,8 +2238,7 @@
         .mmrtl-folders .seg { display: inline-flex; border: 1px solid var(--mf-line); border-radius: 4px; overflow: hidden; }
         .mmrtl-folders .seg button { height: 26px; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
         .mmrtl-folders .seg button[aria-checked="true"] { background: rgba(var(--button-bg-rgb), .12); color: var(--button-bg); font-weight: 600; }
-        .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`;
-      (doc.head || doc.documentElement).appendChild(st);
+        .mmrtl-folders .footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--mf-line); }`);
     }
 
     const KIND_ICON = { personal: '📁', contact: '👤', shared: '👥', group: '👪' };
@@ -2223,6 +2267,7 @@
 
     // Starts a new view; back (optional) adds a back button.
     function dialog(title, back) {
+      setEditor(null);
       box = el('div', { className: 'box', role: 'dialog' });
       box.setAttribute('aria-modal', 'true');
       box.dir = isFa() ? 'rtl' : 'ltr';
@@ -2739,7 +2784,7 @@
           kids.push(chip);
         }
         if (canReact) {
-          const plus = el('button', { type: 'button', className: 'rchip add', title: L('افزودن واکنش', 'Add reaction') }, '☺+');
+          const plus = el('button', { type: 'button', className: 'rchip add', title: L('افزودن واکنش', 'Add reaction') }, icon('icon-emoticon-plus-outline'));
           plus.setAttribute('aria-label', L('افزودن واکنش', 'Add reaction'));
           plus.onclick = () => {
             if (picker) { picker.remove(); picker = null; return; }
@@ -2836,34 +2881,83 @@
       return res.json();
     }
 
-    // Composer at the bottom of a folder: text and files, sent only to the
-    // folder (default) or also to the folder's conversation.
-    function composer(f, folderId) {
+    // Composer, shown above the messages. «در گفتگو هم» uses Mattermost's own
+    // editor (window.Components.AdvancedTextEditor, rendered through a portal by
+    // the panel component, so it has Mattermost's store, emoji picker,
+    // formatting, attachments and drafts). «فقط در پوشه» is a box laid out the
+    // same way whose message is stored only in the folder.
+    let composerMode = 'folder';
+    const conversationIds = new Map(); // folder ID → its conversation channel ID
+
+    const icon = (cls, fallback) => el('i', { className: `icon ${cls}`, 'aria-hidden': 'true' }, fallback ? el('span', { className: 'icon-fallback' }, fallback) : null);
+    const editorAvailable = () => Boolean(host && editorSubs.size && window.Components && window.Components.AdvancedTextEditor && window.ReactDOM && window.ReactDOM.createPortal);
+
+    async function conversationOf(folderId) {
+      if (!conversationIds.has(folderId)) conversationIds.set(folderId, (await call('POST', `/${folderId}/conversation`)).channel_id);
+      return conversationIds.get(folderId);
+    }
+
+    // After Mattermost's editor sent a message: add it to the folder. Uses the
+    // created post if the editor reports it, else the user's newest post there.
+    async function addSentPost(folderId, channelId, res) {
       const me = state().users.currentUserId;
+      let pid = res && ((res.created && res.created.id) || (res.data && res.data.id) || res.id);
+      for (let attempt = 0; !pid && attempt < 5; attempt++) {
+        if (attempt) await new Promise(r => setTimeout(r, 400));
+        try {
+          const list = await v4('GET', `/channels/${encodeURIComponent(channelId)}/posts?per_page=10`);
+          const recent = Date.now() - 20000;
+          pid = (list.order || []).find(x => { const p = list.posts[x]; return p && p.user_id === me && !p.type && p.create_at >= recent; });
+        } catch (e) { /* retry */ }
+      }
+      if (!pid) return showFolder(folderId, undefined, new FolderApiError(404, 'not_found'));
+      try {
+        await call('POST', `/${folderId}/items`, { post_id: pid });
+        await showFolder(folderId, L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
+      } catch (e) {
+        await showFolder(folderId, undefined, e);
+      }
+    }
+
+    // The «فقط در پوشه» box (and the fallback for «در گفتگو هم» when
+    // Mattermost's editor isn't available, e.g. in the overlay).
+    function folderBox(f, folderId, mode) {
       const MAX_FILES = 10;
       const files = [];
-      let mode = 'folder';
-      const wrap = el('div', { className: 'composer' });
-      const ta = el('textarea', { className: 'input', rows: 3, maxLength: 4000, dir: 'auto', placeholder: L('پیام یا توضیح بنویسید… (Ctrl+Enter برای ارسال)', 'Write a message… (Ctrl+Enter to send)') });
+      const box2 = el('div', { className: 'mmbox' });
+      const ta = el('textarea', { className: 'mmbox-text', rows: 1, maxLength: 4000, dir: 'auto',
+        placeholder: mode === 'folder' ? L('پیامی برای این پوشه بنویسید…', 'Write a message for this folder…') : L('پیامی بنویسید…', 'Write a message…') });
       ta.setAttribute('aria-label', L('متن پیام', 'Message text'));
-      const chips = el('div', { className: 'people' });
+      const chips = el('div', { className: 'mmbox-files' });
       const picker = el('input', { type: 'file', multiple: true, hidden: true });
-      const attach = el('button', { type: 'button', className: 'btn small' }, `📎 ${L('پیوست فایل', 'Attach files')}`);
-      attach.onclick = () => picker.click();
       const err = el('div', {});
-      const hint = el('div', { className: 'hint' });
-      const send = el('button', { type: 'button', className: 'btn primary' }, L('ارسال', 'Send'));
-
-      const other = () => [...f.members].find(id => id !== me);
-      const modes = el('div', { className: 'seg', role: 'radiogroup' });
-      modes.setAttribute('aria-label', L('محل ارسال', 'Where to send'));
-      const modeBtn = (value, label) => {
-        const b = el('button', { type: 'button', role: 'radio' }, label);
-        b.onclick = () => { mode = value; sync(); };
-        b.dataset.value = value;
-        return b;
+      const attach = el('button', { type: 'button', className: 'mmbox-btn', title: L('پیوست فایل', 'Attach files') }, icon('icon-paperclip', '📎'));
+      attach.setAttribute('aria-label', L('پیوست فایل', 'Attach files'));
+      attach.onclick = () => picker.click();
+      const emojiBtn = el('button', { type: 'button', className: 'mmbox-btn', title: L('ایموجی', 'Emoji') }, icon('icon-emoticon-happy-outline', '☺'));
+      emojiBtn.setAttribute('aria-label', L('ایموجی', 'Emoji'));
+      let emojiMenu = null;
+      emojiBtn.onclick = () => {
+        if (emojiMenu) { emojiMenu.remove(); emojiMenu = null; return; }
+        emojiMenu = el('div', { className: 'rpicker mmbox-emoji', role: 'group' });
+        for (const name of Object.keys(EMOJI).filter((n, i, a) => a.indexOf(n) === i && !['thumbsup', 'thumbsdown'].includes(n))) {
+          const b = el('button', { type: 'button', title: name }, EMOJI[name]);
+          b.setAttribute('aria-label', name);
+          b.onclick = () => {
+            const at = ta.selectionStart ?? ta.value.length;
+            ta.value = `${ta.value.slice(0, at)}${EMOJI[name]}${ta.value.slice(ta.selectionEnd ?? at)}`;
+            ta.focus();
+            ta.selectionStart = ta.selectionEnd = at + EMOJI[name].length;
+            emojiMenu.remove();
+            emojiMenu = null;
+            sync();
+          };
+          emojiMenu.append(b);
+        }
+        box2.append(emojiMenu);
       };
-      modes.append(modeBtn('folder', L('فقط در پوشه', 'Folder only')), modeBtn('conversation', L('در گفتگو هم', 'Also in conversation')));
+      const send = el('button', { type: 'button', className: 'mmbox-send', title: L('ارسال', 'Send') }, icon('icon-send', '➤'));
+      send.setAttribute('aria-label', L('ارسال', 'Send'));
 
       function addFiles(list) {
         for (const file of list) if (files.length < MAX_FILES) files.push(file);
@@ -2874,26 +2968,25 @@
         const pasted = e.clipboardData && e.clipboardData.files;
         if (pasted && pasted.length) { e.preventDefault(); addFiles(pasted); }
       });
-      wrap.addEventListener('dragover', e => { e.preventDefault(); wrap.classList.add('drop'); });
-      wrap.addEventListener('dragleave', () => wrap.classList.remove('drop'));
-      wrap.addEventListener('drop', e => { e.preventDefault(); wrap.classList.remove('drop'); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
-      ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !send.disabled) { e.preventDefault(); send.click(); } });
+      box2.addEventListener('dragover', e => { e.preventDefault(); box2.classList.add('drop'); });
+      box2.addEventListener('dragleave', () => box2.classList.remove('drop'));
+      box2.addEventListener('drop', e => { e.preventDefault(); box2.classList.remove('drop'); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); });
+      // Enter sends, Shift+Enter is a new line (as in Mattermost).
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!send.disabled) send.click(); }
+      });
       ta.addEventListener('input', () => sync());
 
       function sync() {
-        for (const b of modes.children) b.setAttribute('aria-checked', String(b.dataset.value === mode));
+        ta.style.height = 'auto';
+        ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`;
         chips.replaceChildren(...files.map((file, i) => {
           const x = el('button', { type: 'button', className: 'x', title: L('حذف', 'Remove') }, '✕');
           x.setAttribute('aria-label', L(`حذف ${file.name}`, `Remove ${file.name}`));
           x.onclick = () => { files.splice(i, 1); sync(); };
-          return el('span', { className: 'person' }, el('span', { 'aria-hidden': 'true' }, fileIcon(String(file.name).split('.').pop())), `${file.name} · ${humanSize(file.size)}`, x);
+          return el('span', { className: 'mmbox-chip' }, el('span', { 'aria-hidden': 'true' }, fileIcon(String(file.name).split('.').pop())),
+            el('span', { className: 'n', dir: 'auto' }, file.name), el('span', { className: 's' }, humanSize(file.size)), x);
         }));
-        const who = other();
-        hint.textContent = mode === 'folder'
-          ? L('فقط در همین پوشه نمایش داده می‌شود و در هیچ گفتگویی نیست.', 'Shown only in this folder, not in any conversation.')
-          : f.kind === 'group' ? L('در پیام گروهی اعضای پوشه هم فرستاده می‌شود.', 'Also sent to the group message of the folder’s members.')
-            : f.kind === 'shared' && who ? L(`در پیام مستقیم با ${nameOf(who)} هم فرستاده می‌شود.`, `Also sent in your direct message with ${nameOf(who)}.`)
-              : L('در گفتگو با خودتان هم فرستاده می‌شود (فقط شما می‌بینید).', 'Also sent to your conversation with yourself (only you see it).');
         attach.disabled = files.length >= MAX_FILES;
         send.disabled = !ta.value.trim() && !files.length;
       }
@@ -2908,8 +3001,9 @@
             form.append('text', text);
             for (const file of files) form.append('files', file, file.name);
             await sendForm(`${API()}/${folderId}/notes`, form);
+            await showFolder(folderId, L('در پوشه ذخیره شد.', 'Saved in the folder.'));
           } else {
-            const { channel_id: channelId } = await call('POST', `/${folderId}/conversation`);
+            const channelId = await conversationOf(folderId);
             let fileIds = [];
             if (files.length) {
               const form = new FormData();
@@ -2919,17 +3013,64 @@
             }
             const post = await v4('POST', '/posts', { channel_id: channelId, message: text, file_ids: fileIds });
             await call('POST', `/${folderId}/items`, { post_id: post.id });
+            await showFolder(folderId, L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
           }
-          await showFolder(folderId, mode === 'folder' ? L('در پوشه ذخیره شد.', 'Saved in the folder.') : L('ارسال شد و به پوشه اضافه شد.', 'Sent and added to the folder.'));
         } catch (e) {
           err.replaceChildren(errorNode(e));
           send.disabled = false;
         }
       };
 
-      wrap.append(el('div', { className: 'section' }, L('ارسال در پوشه', 'Send to this folder')), ta, chips,
-        el('div', { className: 'row-between' }, el('div', { className: 'tools' }, attach, modes), send), hint, err, picker);
+      box2.append(ta, chips, el('div', { className: 'mmbox-bar' }, attach, emojiBtn, el('span', { className: 'grow' }), send), picker);
       sync();
+      return el('div', {}, box2, err);
+    }
+
+    function composer(f, folderId) {
+      const me = state().users.currentUserId;
+      const wrap = el('div', { className: 'composer' });
+      const seg = el('div', { className: 'seg', role: 'radiogroup' });
+      seg.setAttribute('aria-label', L('محل ارسال', 'Where to send'));
+      const area = el('div', { className: 'composer-area' });
+      const hint = el('div', { className: 'hint' });
+      const other = [...f.members].find(id => id !== me);
+
+      const render = async () => {
+        for (const b of seg.children) b.setAttribute('aria-checked', String(b.dataset.value === composerMode));
+        hint.textContent = composerMode === 'folder'
+          ? L('فقط در همین پوشه نمایش داده می‌شود و در هیچ گفتگویی نیست.', 'Shown only in this folder, not in any conversation.')
+          : f.kind === 'group' ? L('در پیام گروهی اعضای پوشه هم فرستاده می‌شود.', 'Also sent to the group message of the folder’s members.')
+            : f.kind === 'shared' && other ? L(`در پیام مستقیم با ${nameOf(other)} هم فرستاده می‌شود.`, `Also sent in your direct message with ${nameOf(other)}.`)
+              : L('در گفتگو با خودتان هم فرستاده می‌شود (فقط شما می‌بینید).', 'Also sent to your conversation with yourself (only you see it).');
+        setEditor(null);
+        if (composerMode === 'conversation' && editorAvailable()) {
+          const slot = el('div', { className: 'mm-editor' });
+          area.replaceChildren(slot);
+          try {
+            const channelId = await conversationOf(folderId);
+            if (!slot.isConnected) return;
+            setEditor({
+              key: `${folderId}:${channelId}`, node: slot, channelId,
+              storageKey: `mmrtl-folder-${folderId}`,
+              placeholder: L('پیامی بنویسید…', 'Write a message…'),
+              afterSubmit: res => { addSentPost(folderId, channelId, res); }
+            });
+          } catch (e) {
+            area.replaceChildren(errorNode(e));
+          }
+        } else {
+          area.replaceChildren(folderBox(f, folderId, composerMode));
+        }
+      };
+      const modeBtn = (value, label) => {
+        const b = el('button', { type: 'button', role: 'radio' }, label);
+        b.dataset.value = value;
+        b.onclick = () => { if (composerMode !== value) { composerMode = value; render(); } };
+        return b;
+      };
+      seg.append(modeBtn('folder', L('فقط در پوشه', 'Folder only')), modeBtn('conversation', L('در گفتگو هم', 'Also in conversation')));
+      wrap.append(el('div', { className: 'composer-head' }, seg), area, hint);
+      render();
       return wrap;
     }
 
@@ -2996,6 +3137,7 @@
       }
 
       const active = f.status === 'active';
+      if (active) b.append(composer(f, id));
       const missing = selection.filter(pid => !items.some(i => i.post_id === pid));
       if (missing.length && active) {
         const add = el('button', { type: 'button', className: 'btn primary block', style: 'margin-top:12px' },
@@ -3031,7 +3173,19 @@
       const sorted = [...items].sort((a, c) => c.added_at - a.added_at);
       for (const it of sorted) msgs.append(itemCard(f, id, it, active, act));
       b.append(msgs);
-      if (active) b.append(composer(f, id));
+
+      // Newest messages are at the top; after scrolling down, a button brings them back.
+      const firstCard = msgs.firstElementChild;
+      if (firstCard) {
+        const jump = el('button', { type: 'button', className: 'jump', hidden: true }, `↑ ${L('آخرین پیام', 'Latest message')}`);
+        const scroller = host || b;
+        scroller.onscroll = () => {
+          if (!firstCard.isConnected) return;
+          jump.hidden = firstCard.getBoundingClientRect().top >= scroller.getBoundingClientRect().top - 40;
+        };
+        jump.onclick = () => firstCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        b.append(jump);
+      }
 
       const shared = f.kind === 'shared' || f.kind === 'group';
       const footer = el('div', { className: 'footer' });
@@ -3058,6 +3212,7 @@
     return {
       open, openMany, openFolder, openCreate, openForChannel, close, attach, detach,
       setRhs: r => { rhs = r; },
+      subscribeEditor: fn => { editorSubs.add(fn); fn(editorSlot); return () => editorSubs.delete(fn); },
       list: () => call('GET'),
       onChange: fn => listeners.add(fn),
       loadNames, nameOf, kindLabels, splitFences
@@ -3074,10 +3229,7 @@
     const POSTS = 'div.post[id^="post_"]:not(.post--system)';
 
     function injectCSS() {
-      if (document.getElementById('mmrtl-sel-style')) return;
-      const st = document.createElement('style');
-      st.id = 'mmrtl-sel-style';
-      st.textContent = `
+      upsertStyle(document, 'mmrtl-sel-style', `
         html.mmrtl-selecting ${POSTS} { position: relative; }
         .mmrtl-sel { position: absolute; top: 10px; inset-inline-start: 6px; z-index: 6; width: 20px; height: 20px; padding: 0; border-radius: 4px; border: 2px solid rgba(var(--center-channel-color-rgb), .45); background: var(--center-channel-bg); color: var(--button-color); font-size: 13px; line-height: 16px; cursor: pointer; }
         .mmrtl-sel[aria-checked="true"] { background: var(--button-bg); border-color: var(--button-bg); }
@@ -3085,8 +3237,7 @@
         .mmrtl-selbar { position: fixed; z-index: 2147482998; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: var(--center-channel-bg); color: var(--center-channel-color); border: 1px solid rgba(var(--center-channel-color-rgb), .16); box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 14px; }
         .mmrtl-selbar button { height: 32px; padding: 0 14px; border-radius: 4px; border: 1px solid rgba(var(--center-channel-color-rgb), .16); background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
         .mmrtl-selbar button.primary { background: var(--button-bg); color: var(--button-color); border-color: transparent; }
-        .mmrtl-selbar button:disabled { opacity: .45; cursor: default; }`;
-      (document.head || document.documentElement).appendChild(st);
+        .mmrtl-selbar button:disabled { opacity: .45; cursor: default; }`);
     }
 
     function setPicked(post, id, value) {
@@ -3182,10 +3333,7 @@
     const setCollapsed = v => { try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) { /* not persisted */ } };
 
     function injectCSS() {
-      if (document.getElementById('mmrtl-fsb-style')) return;
-      const st = document.createElement('style');
-      st.id = 'mmrtl-fsb-style';
-      st.textContent = `
+      upsertStyle(document, 'mmrtl-fsb-style', `
         .mmrtl-fsb { padding: 2px 8px 6px; color: var(--sidebar-text); font-size: 13px; }
         .mmrtl-fsb button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border-radius: 4px; cursor: pointer; color: inherit; }
         .mmrtl-fsb button:hover, .mmrtl-fsb button:focus-visible { background: rgba(var(--sidebar-text-rgb), .08); }
@@ -3196,8 +3344,7 @@
         .mmrtl-fsb .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .mmrtl-fsb .who { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .6; }
         .mmrtl-fsb .badge { margin-inline-start: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--mention-bg); color: var(--mention-color); font-size: 11px; text-align: center; }
-        .mmrtl-fsb .muted { opacity: .7; }`;
-      (document.head || document.documentElement).appendChild(st);
+        .mmrtl-fsb .muted { opacity: .7; }`);
     }
 
     function el(tag, props = {}, ...kids) {
@@ -3799,14 +3946,28 @@
       );
       // Folders open in the right-hand panel when the API exists, else in an overlay.
       if (React && typeof registry.registerRightHandSidebarComponent === 'function') {
+        // The panel renders inside Mattermost's React tree, so it can portal
+        // Mattermost's own editor (with its store) into the folder view.
         const FoldersPanel = () => {
           const ref = React.useRef(null);
+          const [slot, setSlot] = React.useState(null);
           React.useEffect(() => {
             const el = ref.current;
+            const off = Folders.subscribeEditor(setSlot);
             Folders.attach(el);
-            return () => Folders.detach(el);
+            return () => { off(); Folders.detach(el); };
           }, []);
-          return React.createElement('div', { ref, className: 'mmrtl-folders rhs' });
+          const Editor = window.Components && window.Components.AdvancedTextEditor;
+          const portal = slot && Editor && window.ReactDOM && window.ReactDOM.createPortal
+            ? window.ReactDOM.createPortal(React.createElement(Editor, {
+              // RHS_COMMENT gives the box the id «reply_textbox», which is free while
+              // this panel occupies the right-hand side (CENTER would duplicate
+              // the channel's own «post_textbox»). No rootId: a normal post.
+              key: slot.key, location: 'RHS_COMMENT', channelId: slot.channelId, rootId: '', isThreadView: false,
+              placeholder: slot.placeholder, storageKey: slot.storageKey, afterSubmit: slot.afterSubmit
+            }), slot.node)
+            : null;
+          return React.createElement('div', { ref, className: 'mmrtl-folders rhs' }, portal);
         };
         Folders.setRhs(registry.registerRightHandSidebarComponent(FoldersPanel, L('پوشه‌ها', 'Folders')));
       }
