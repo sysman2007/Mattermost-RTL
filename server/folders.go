@@ -65,8 +65,9 @@ type folderMeta struct {
 }
 
 type folderItem struct {
-	PostID    string `json:"post_id"`
-	ChannelID string `json:"channel_id"`
+	PostID    string `json:"post_id,omitempty"` // a conversation message…
+	NoteID    string `json:"note_id,omitempty"` // …or a folder-only note (notes.go)
+	ChannelID string `json:"channel_id,omitempty"`
 	AddedBy   string `json:"added_by"`
 	AddedAt   int64  `json:"added_at"`
 }
@@ -254,6 +255,13 @@ func (p *Plugin) removeFromIndex(uid, fid string) {
 
 // deleteFolder removes the folder, its items and every index entry.
 func (p *Plugin) deleteFolder(f *folderMeta) error {
+	if items, err := p.loadItems(f.ID); err == nil {
+		for _, it := range items {
+			if it.NoteID != "" {
+				_ = p.API.KVDelete(keyNote(it.NoteID))
+			}
+		}
+	}
 	if appErr := p.API.KVDelete(keyFolder(f.ID)); appErr != nil {
 		p.API.LogError("folders: delete failed", "folder_id", f.ID, "error", appErr.Error())
 		return errFolderStore
@@ -699,13 +707,17 @@ func (p *Plugin) leave(uid, fid string) error {
 }
 
 type folderItemView struct {
-	PostID    string `json:"post_id"`
-	ChannelID string `json:"channel_id"`
-	UserID    string `json:"user_id"`   // author of the post
-	CreateAt  int64  `json:"create_at"` // when the post was sent
-	AddedBy   string `json:"added_by"`
-	AddedAt   int64  `json:"added_at"`
-	Message   string `json:"message"`
+	Kind      string              `json:"kind"` // "post" or "note"
+	ID        string              `json:"id"`   // post ID or note ID
+	PostID    string              `json:"post_id,omitempty"`
+	ChannelID string              `json:"channel_id,omitempty"`
+	UserID    string              `json:"user_id"`   // author
+	CreateAt  int64               `json:"create_at"` // when it was sent
+	AddedBy   string              `json:"added_by"`
+	AddedAt   int64               `json:"added_at"`
+	Message   string              `json:"message"`
+	Files     []fileView          `json:"files"`
+	Reactions map[string][]string `json:"reactions"` // emoji → user IDs
 }
 
 func (p *Plugin) loadItems(fid string) ([]folderItem, error) {
@@ -735,6 +747,18 @@ func (p *Plugin) visibleItems(uid, fid string) ([]folderItemView, error) {
 	canRead := map[string]bool{} // channel → permission, one lookup per channel
 	gone := map[string]bool{}
 	for _, it := range items {
+		if it.NoteID != "" {
+			n, err := p.readNote(it.NoteID)
+			if err == errFolderNotFound {
+				gone[it.NoteID] = true
+				continue
+			}
+			if err != nil {
+				continue // transient: hide for now, keep the item
+			}
+			out = append(out, p.noteView(n, it))
+			continue
+		}
 		post, appErr := p.API.GetPost(it.PostID)
 		if appErr != nil && appErr.StatusCode != http.StatusNotFound {
 			continue // transient lookup failure: hide for now, keep the item
@@ -752,8 +776,9 @@ func (p *Plugin) visibleItems(uid, fid string) ([]folderItemView, error) {
 			continue
 		}
 		out = append(out, folderItemView{
-			PostID: it.PostID, ChannelID: post.ChannelId, UserID: post.UserId, CreateAt: post.CreateAt,
+			Kind: "post", ID: post.Id, PostID: post.Id, ChannelID: post.ChannelId, UserID: post.UserId, CreateAt: post.CreateAt,
 			AddedBy: it.AddedBy, AddedAt: it.AddedAt, Message: post.Message,
+			Files: p.fileViews(post.FileIds), Reactions: p.postReactions(post),
 		})
 	}
 	if len(gone) > 0 {
@@ -773,7 +798,7 @@ func (p *Plugin) dropItems(fid string, gone map[string]bool) {
 		}
 		kept := make([]folderItem, 0, len(items))
 		for _, it := range items {
-			if !gone[it.PostID] {
+			if !gone[itemID(it)] {
 				kept = append(kept, it)
 			}
 		}
@@ -827,8 +852,9 @@ func (p *Plugin) addItem(uid, fid, postID string) error {
 	})
 }
 
-// removeItem: any active member can remove an item.
-func (p *Plugin) removeItem(uid, fid, postID string) (bool, error) {
+// removeItem: any active member can remove an item (a post, or a note, whose
+// document is deleted too).
+func (p *Plugin) removeItem(uid, fid, id string) (bool, error) {
 	f, err := p.readFolderFor(uid, fid)
 	if err != nil {
 		return false, err
@@ -837,7 +863,9 @@ func (p *Plugin) removeItem(uid, fid, postID string) (bool, error) {
 		return false, errFolderState
 	}
 	removed := false
+	note := ""
 	err = p.casKV(keyItems(fid), func(old []byte) ([]byte, error) {
+		note = ""
 		var items []folderItem
 		if len(old) > 0 {
 			if err := json.Unmarshal(old, &items); err != nil {
@@ -846,8 +874,10 @@ func (p *Plugin) removeItem(uid, fid, postID string) (bool, error) {
 		}
 		kept := make([]folderItem, 0, len(items))
 		for _, it := range items {
-			if it.PostID != postID {
+			if itemID(it) != id {
 				kept = append(kept, it)
+			} else if it.NoteID != "" {
+				note = it.NoteID
 			}
 		}
 		removed = len(kept) != len(items)
@@ -860,6 +890,11 @@ func (p *Plugin) removeItem(uid, fid, postID string) (bool, error) {
 		}
 		return b, nil
 	})
+	if err == nil && note != "" {
+		if appErr := p.API.KVDelete(keyNote(note)); appErr != nil {
+			p.API.LogWarn("folders: could not delete note", "note_id", note)
+		}
+	}
 	return removed, err
 }
 
@@ -937,6 +972,10 @@ func (p *Plugin) handleFolders(w http.ResponseWriter, r *http.Request, uid strin
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"added": true})
+	case len(parts) >= 2 && (parts[1] == "notes" || parts[1] == "conversation"):
+		if !p.handleNotes(w, r, uid, parts) {
+			writeError(w, http.StatusNotFound, "not_found")
+		}
 	case len(parts) == 3 && r.Method == http.MethodDelete && parts[1] == "items":
 		if !model.IsValidId(parts[2]) {
 			writeError(w, http.StatusNotFound, "not_found")
